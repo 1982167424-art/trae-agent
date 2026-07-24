@@ -575,13 +575,14 @@ async def _run_simple_interactive_loop(
             # Execute the task
             console.print(f"\n[blue]Executing task: {task}[/blue]")
 
-            # Start console and execute task
-            console_task = asyncio.create_task(cli_console.start())
-            execution_task = asyncio.create_task(agent.run(task, task_args))
+            # 重置 console 状态，为新一轮任务做准备
+            # （上一轮的 agent_execution 还是 COMPLETED 状态，会导致 start() 的 while 循环立即退出）
+            cli_console.agent_execution = None
+            cli_console.console_step_history.clear()
 
-            # Wait for execution to complete
-            _ = await execution_task
-            _ = await console_task
+            # agent.run() 内部会创建 cli_console.start() 协程来显示进度
+            # 不需要在这里重复创建，否则两个 console 协程会互相干扰
+            await agent.run(task, task_args)
 
             console.print(f"\n[green]Trajectory saved to: {trajectory_file}[/green]")
 
