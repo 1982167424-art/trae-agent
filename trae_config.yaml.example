@@ -19,26 +19,44 @@ lakeview:
     model: lakeview_model
 
 model_providers:
-    anthropic:
-        api_key: your_anthropic_api_key
-        provider: anthropic
+    # MiMo 本地隐私网关 (OpenAI 兼容协议, 转发到远端 mimo-v2.5-pro)
+    # 本地小模型 Qwen2.5-0.5B 用于 PII 脱敏, 真实请求经网关转发到 mimo-v2.5-pro
+    openai:
+        api_key: mimo-gateway
+        provider: openai
+        base_url: http://localhost:8080/v1
+    # 本地 Ollama 模型 (纯本地推理, 不出本机)
+    ollama:
+        api_key: ollama
+        provider: ollama
+        base_url: http://localhost:11434/v1
 
 models:
     trae_agent_model:
-        model_provider: anthropic
-        model: claude-4-sonnet
-        max_tokens: 4096
+        model_provider: openai
+        model: mimo-v2.5-pro
+        max_tokens: 8192
         temperature: 0.5
         top_p: 1
         top_k: 0
         max_retries: 10
         parallel_tool_calls: true
     lakeview_model:
-        model_provider: anthropic
-        model: claude-3.5-sonnet
-        max_tokens: 4096
+        model_provider: openai
+        model: mimo-v2.5-pro
+        max_tokens: 8192
         temperature: 0.5
         top_p: 1
         top_k: 0
         max_retries: 10
         parallel_tool_calls: true
+    # 本地 Ollama 模型 (可选, 通过 --provider ollama --model <model> 切换)
+    local_model:
+        model_provider: ollama
+        model: qwen2.5:0.5b
+        max_tokens: 4096
+        temperature: 0.5
+        top_p: 1
+        top_k: 0
+        max_retries: 10
+        parallel_tool_calls: false
