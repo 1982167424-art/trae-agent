@@ -241,6 +241,9 @@ class BaseAgent(ABC):
                     execution.agent_state = AgentState.ERROR
                     step.state = AgentStepState.ERROR
                     step.error = str(error)
+                    execution.final_result = (
+                        f"Agent step {step.step_number} failed: {str(error)}"
+                    )
                     await self._finalize_step(step, messages, execution)
                     break
             if step_number > self._max_steps and not execution.success:

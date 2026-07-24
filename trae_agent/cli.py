@@ -494,6 +494,11 @@ def plan(
             # Heuristic: plan 模式默认上限 30,避免无限制狂奔。
             # 仅当用户未显式指定时才施加上限,否则用户的 --max-steps 会被强制压回 30。
             if config.trae_agent.max_steps > 30:
+                console.print(
+                    f"[yellow]Warning: plan mode caps max_steps at 30. "
+                    f"Config value {config.trae_agent.max_steps} overridden. "
+                    f"Use --max-steps to explicitly set a higher value.[/yellow]"
+                )
                 config.trae_agent.max_steps = 30
 
     cli_console = ConsoleFactory.create_console(

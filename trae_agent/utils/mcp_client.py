@@ -93,9 +93,9 @@ class MCPClient:
                 )
                 await self.session.initialize()
                 self.update_mcp_server_status(mcp_server_name, MCPServerStatus.CONNECTED)
-            except Exception as e:
+            except Exception:
                 self.update_mcp_server_status(mcp_server_name, MCPServerStatus.DISCONNECTED)
-                raise e
+                raise
 
     async def call_tool(self, name, args):
         output = await self.session.call_tool(name, args)

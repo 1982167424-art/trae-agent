@@ -107,7 +107,7 @@ class OllamaClient(BaseLLMClient):
                 )
         else:
             # consider response is not a tool call
-            content = str(response.message.content)
+            content = response.message.content or ""
 
         llm_response = LLMResponse(
             content=content,
