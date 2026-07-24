@@ -78,3 +78,14 @@ models:
         top_k: 0
         max_retries: 10
         parallel_tool_calls: false
+    # Kimi-VL-A3B-Instruct (Moonshot 多模态 MoE; 已下载 GGUF 到 /workspace/models/kimi-vl-a3b-instruct/)
+    # 纯文本任务可只加载主模型; 视觉任务需同时加载 mmproj 投影器
+    kimi_vl_a3b_instruct:
+        model_provider: ollama
+        model: kimi-vl-a3b
+        max_tokens: 8192
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 0
+        max_retries: 10
+        parallel_tool_calls: false
