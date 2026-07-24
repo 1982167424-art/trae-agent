@@ -50,13 +50,31 @@ models:
         top_k: 0
         max_retries: 10
         parallel_tool_calls: true
-    # 本地 Ollama 模型 (可选, 通过 --provider ollama --model <model> 切换)
-    local_model:
+    # 本地 Ollama 模型 (纯本地推理, 不出本机; 通过 --provider ollama --model <model> 切换)
+    deepseek_r1_1_5b:
         model_provider: ollama
-        model: qwen2.5:0.5b
+        model: deepseek-r1:1.5b
+        max_tokens: 4096
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 0
+        max_retries: 10
+        parallel_tool_calls: false
+    qwen2_5_coder_7b:
+        model_provider: ollama
+        model: qwen2.5-coder:7b
+        max_tokens: 8192
+        temperature: 0.5
+        top_p: 0.95
+        top_k: 0
+        max_retries: 10
+        parallel_tool_calls: true
+    qwen2_5_coder_0_5b:
+        model_provider: ollama
+        model: qwen2.5-coder:0.5b
         max_tokens: 4096
         temperature: 0.5
-        top_p: 1
+        top_p: 0.95
         top_k: 0
         max_retries: 10
         parallel_tool_calls: false
