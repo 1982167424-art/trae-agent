@@ -186,7 +186,14 @@ class TraeAgent(BaseAgent):
 
                     self._tools.append(ReadOnlyBashTool(model_provider=provider))
                 else:
-                    self._tools.append(tools_registry[t](model_provider=provider))
+                    # 传入 working_dir 让 edit 工具做越权防护(只允许落在 project 内)。
+                    # 仅 edit 工具接受该参数,其余工具(BashTool 等)不接受,需区分。
+                    wd = extra_args.get("project_path") if extra_args else None
+                    if t == "str_replace_based_edit_tool":
+                        tool = tools_registry[t](model_provider=provider, working_dir=wd)
+                    else:
+                        tool = tools_registry[t](model_provider=provider)
+                    self._tools.append(tool)
             # 重新构造 tool_caller 以匹配新工具集
             from trae_agent.tools.base import ToolExecutor
 

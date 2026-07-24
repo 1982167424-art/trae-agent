@@ -22,12 +22,17 @@ def get_llm() -> Llama:
     with _LOCK:
         if _LLM is None:
             n_ctx = int(os.environ.get("LOCAL_MODEL_CTX", "2048"))
-            n_threads = int(os.environ.get("LOCAL_MODEL_THREADS", "2"))
+            # P2 修复:原写死 n_threads=2,单核以外的机器白白浪费 CPU。
+            # 默认用 os.cpu_count(),可通过 LOCAL_MODEL_THREADS 覆盖。
+            n_threads = int(os.environ.get("LOCAL_MODEL_THREADS", str(os.cpu_count() or 4)))
+            # P2 修复:原写死 n_gpu_layers=0(纯 CPU)。改为 -1 让 llama-cpp
+            # 自动把能 offload 的层放到 GPU;无 GPU 时回退到 CPU,不影响运行。
+            n_gpu_layers = int(os.environ.get("LOCAL_MODEL_GPU_LAYERS", "-1"))
             _LLM = Llama(
                 model_path=DEFAULT_GGUF,
                 n_ctx=n_ctx,
                 n_threads=n_threads,
-                n_gpu_layers=0,
+                n_gpu_layers=n_gpu_layers,
                 use_mmap=True,
                 use_mlock=False,
                 verbose=False,

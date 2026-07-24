@@ -3,7 +3,6 @@
 
 """Anthropic API client wrapper with tool integration."""
 
-import json
 from typing_extensions import override
 
 import anthropic
@@ -42,12 +41,14 @@ class AnthropicClient(BaseLLMClient):
         return self.client.messages.create(
             model=model_config.model,
             messages=self.message_history,
-            max_tokens=model_config.max_tokens,
+            # max_tokens 是 Anthropic 必填项;config 默认 None 时必须给一个兜底值。
+            max_tokens=model_config.max_tokens or 4096,
             system=self.system_message,
             tools=tool_schemas,
             temperature=model_config.temperature,
             top_p=model_config.top_p,
-            top_k=model_config.top_k,
+            # Anthropic 不接受 top_k=0(要求 >= 1),未配置时交给 SDK 用默认值(传 NOT_GIVEN)。
+            top_k=model_config.top_k if model_config.top_k > 0 else anthropic.NOT_GIVEN,
         )
 
     @override
@@ -104,13 +105,13 @@ class AnthropicClient(BaseLLMClient):
         # Handle tool calls in response
         content = ""
         tool_calls: list[ToolCall] = []
+        # 同一 assistant turn 的所有 content blocks 必须合并到一条 message 里。
+        assistant_blocks: list = []
 
         for content_block in response.content:
             if content_block.type == "text":
                 content += content_block.text
-                self.message_history.append(
-                    anthropic.types.MessageParam(role="assistant", content=content_block.text)
-                )
+                assistant_blocks.append(content_block.text)
             elif content_block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(
@@ -119,9 +120,15 @@ class AnthropicClient(BaseLLMClient):
                         arguments=content_block.input,  # pyright: ignore[reportArgumentType]
                     )
                 )
-                self.message_history.append(
-                    anthropic.types.MessageParam(role="assistant", content=[content_block])
-                )
+                assistant_blocks.append(content_block)
+
+        # P0 修复:原代码把每个 block 单独 append 成一条 assistant message,
+        # 导致含 thinking/text+tool_use 的响应里出现孤儿 text 段,API 直接拒绝。
+        # 正确做法是合并成一条 message(content 为 block 列表)。
+        if assistant_blocks:
+            self.message_history.append(
+                anthropic.types.MessageParam(role="assistant", content=assistant_blocks)
+            )
 
         usage = None
         if response.usage:
@@ -189,11 +196,13 @@ class AnthropicClient(BaseLLMClient):
 
     def parse_tool_call(self, tool_call: ToolCall) -> anthropic.types.ToolUseBlockParam:
         """Parse the tool call from the LLM response."""
+        # P0 修复:Anthropic 期望 input 是 dict,原代码 json.dumps 成字符串会
+        # 触发 "Input should be a valid dictionary"。tool_call.arguments 已是 dict。
         return anthropic.types.ToolUseBlockParam(
             type="tool_use",
             id=tool_call.call_id,
             name=tool_call.name,
-            input=json.dumps(tool_call.arguments),
+            input=tool_call.arguments,
         )
 
     def parse_tool_call_result(

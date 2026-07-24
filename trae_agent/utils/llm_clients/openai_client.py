@@ -54,7 +54,8 @@ class OpenAIClient(BaseLLMClient):
             and "o4-mini" not in model_config.model
             and "gpt-5" not in model_config.model
             else openai.NOT_GIVEN,
-            top_p=model_config.top_p,
+            # top_p 未配置(None)时不能传给 SDK,否则 Invalid value。未设置走 NOT_GIVEN。
+            top_p=model_config.top_p if model_config.top_p is not None else openai.NOT_GIVEN,
             max_output_tokens=model_config.max_tokens,
         )
 
@@ -123,11 +124,20 @@ class OpenAIClient(BaseLLMClient):
                     tool_call_param["id"] = output_block.id
                 self.message_history.append(tool_call_param)
             elif output_block.type == "message":
-                content = "".join(
-                    content_block.text
-                    for content_block in output_block.content
-                    if content_block.type == "output_text"
-                )
+                parts: list[str] = []
+                for content_block in output_block.content:
+                    if content_block.type == "output_text":
+                        parts.append(content_block.text)
+                    elif content_block.type == "refusal":
+                        # P1 修复:原代码只收 output_text,refusal 被静默丢弃,
+                        # 用户看到"模型没说话"且无任何提示。这里把拒答回显。
+                        refusal_text = getattr(content_block, "text", "") or ""
+                        parts.append(
+                            f"[MODEL REFUSAL] {refusal_text}"
+                            if refusal_text
+                            else "[MODEL REFUSAL] The model refused to answer."
+                        )
+                content = "".join(parts)
 
         if content != "":
             self.message_history.append(

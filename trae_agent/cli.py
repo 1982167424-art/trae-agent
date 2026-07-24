@@ -87,7 +87,13 @@ def check_docker(timeout=3):
 
 
 def build_with_pyinstaller():
-    os.system("rm -rf trae_agent/dist")
+    import shutil
+
+    # P1 修复:原实现用 os.system("rm -rf ...") / mkdir / cp,在 Windows 上
+    # 直接不可用,且跨平台行为不一致。改用 shutil,且用 Path 处理目录。
+    dist_dir = Path("trae_agent/dist")
+    if dist_dir.exists():
+        shutil.rmtree(dist_dir)
     print("--- Building edit_tool ---")
     subprocess.run(
         [
@@ -109,11 +115,14 @@ def build_with_pyinstaller():
         ],
         check=True,
     )
-    os.system("mkdir trae_agent/dist")
-    os.system("cp dist/edit_tool/edit_tool trae_agent/dist")
-    os.system("cp -r dist/json_edit_tool/_internal trae_agent/dist")
-    os.system("cp dist/json_edit_tool/json_edit_tool trae_agent/dist")
-    os.system("rm -rf dist")
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy("dist/edit_tool/edit_tool", dist_dir / "edit_tool")
+    internal_src = Path("dist/json_edit_tool/_internal")
+    if internal_src.exists():
+        shutil.copytree(internal_src, dist_dir / "_internal", dirs_exist_ok=True)
+    shutil.copy("dist/json_edit_tool/json_edit_tool", dist_dir / "json_edit_tool")
+    if Path("dist").exists():
+        shutil.rmtree("dist")
 
 
 @click.group()
@@ -482,10 +491,14 @@ def plan(
 
     # Force plan mode.
     if config.trae_agent:
-        config.trae_agent.max_steps = max_steps or config.trae_agent.max_steps or 30
-        # Heuristic: in plan mode, prefer max_steps=20 by default to avoid runaway.
-        if config.trae_agent.max_steps > 30:
-            config.trae_agent.max_steps = 30
+        if max_steps is not None:
+            config.trae_agent.max_steps = max_steps
+        else:
+            config.trae_agent.max_steps = config.trae_agent.max_steps or 30
+            # Heuristic: plan 模式默认上限 30,避免无限制狂奔。
+            # 仅当用户未显式指定时才施加上限,否则用户的 --max-steps 会被强制压回 30。
+            if config.trae_agent.max_steps > 30:
+                config.trae_agent.max_steps = 30
 
     cli_console = ConsoleFactory.create_console(
         console_type=ConsoleType.SIMPLE, mode=ConsoleMode.RUN
