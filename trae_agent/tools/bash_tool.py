@@ -125,6 +125,8 @@ class _BashSession:
         await self._process.stdin.drain()
 
         # read output from the process, until the sentinel is found
+        buffer = ""
+        output = ""
         try:
             async with asyncio.timeout(self._timeout):
                 # Read until we find the sentinel in the stdout stream
@@ -316,9 +318,13 @@ class ReadOnlyBashTool(BashTool):
         # === Git writes ===
         ("git push", r"\bgit\s+push\b"),
         ("git commit", r"\bgit\s+commit\b"),
+        ("git add", r"\bgit\s+add\b"),
         ("git reset", r"\bgit\s+reset\b"),
-        ("git stash drop", r"\bgit\s+stash\s+drop\b"),
+        ("git stash", r"\bgit\s+stash\s+(push|apply|drop)\b"),
         ("git checkout (file)", r"\bgit\s+checkout\s+(?![\w./-]+$)[^|&;]+"),
+        ("git merge", r"\bgit\s+merge\b"),
+        ("git rebase", r"\bgit\s+rebase\b"),
+        ("git tag", r"\bgit\s+tag\b"),
         # === Network mutation ===
         ("curl POST/PUT/DELETE", r"\bcurl\s+[^|;&]*-X\s*(POST|PUT|DELETE|PATCH)\b"),
         ("wget POST/PUT", r"\bwget\s+[^|;&]*--post"),

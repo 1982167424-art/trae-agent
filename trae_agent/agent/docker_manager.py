@@ -149,11 +149,17 @@ class DockerManager:
             print(f"Stopping and removing managed container {self.container.short_id}...")
             try:
                 self.container.stop()
-                self.container.remove()
-                print("Container cleaned up successfully.")
+                print("Container stopped successfully.")
             except DockerException as e:
                 print(
-                    f"[yellow]Warning: Could not clean up container {self.container.short_id}: {e}[/yellow]"
+                    f"[yellow]Warning: Could not stop container {self.container.short_id}: {e}[/yellow]"
+                )
+            try:
+                self.container.remove(force=True)
+                print("Container removed successfully.")
+            except DockerException as e:
+                print(
+                    f"[yellow]Warning: Could not remove container {self.container.short_id}: {e}[/yellow]"
                 )
 
         self.container = None
