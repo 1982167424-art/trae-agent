@@ -100,19 +100,37 @@ echo "  ✓ uv: $(command -v "$UV" 2>/dev/null || echo 'via pipx/pip')"
 echo "▸ Installing trae-agent to $INSTALL_BIN..."
 
 if [ -n "$UV" ]; then
-    # uv tool install — sandboxed, isolated env, exposes entry points as `trae`.
-    "$UV" tool install --from "git+${REPO_URL}" "$PACKAGE_NAME" 2>&1 | tail -5 || {
+    # uv tool install — sandboxed, isolated env, exposes entry points.
+    # The entry-point name in pyproject.toml is `trae-cli` (not `trae`),
+    # so uv creates ~/.local/bin/trae-cli. We create a `trae` alias below.
+    #
+    # NOTE: trae-agent's CLI does `import docker` at module-import time
+    # (docker_manager.py is unconditionally imported by base_agent.py),
+    # so we MUST install the `evaluation` extra (which provides docker,
+    # pexpect, unidiff). Otherwise the first `trae` invocation crashes
+    # with ModuleNotFoundError before any command runs.
+    #
+    # We use PEP 508 extras syntax in --with, which is the only form
+    # that uv recognises for extras from a git+ dependency.
+    "$UV" tool install --with "trae-agent[evaluation]" --from "git+${REPO_URL}" trae-agent --force 2>&1 | tail -5 || {
         echo "✗ uv tool install failed. Trying alternative..." >&2
-        "$UV" pip install --system "trae-agent @ git+${REPO_URL}" 2>&1 | tail -5
+        "$UV" pip install --system "trae-agent[evaluation] @ git+${REPO_URL}" 2>&1 | tail -5
     }
-    # uv tool puts binaries in ~/.local/bin by default; symlink for convenience.
-    TOOL_BIN="$HOME/.local/bin/trae"
-    if [ -e "$TOOL_BIN" ] && [ "$INSTALL_BIN" != "$TOOL_BIN" ]; then
-        ln -sf "$TOOL_BIN" "$INSTALL_BIN"
+    TOOL_BIN="$HOME/.local/bin/trae-cli"
+    if [ -e "$TOOL_BIN" ]; then
+        # User-wide alias — creates `trae` regardless of $INSTALL_BIN.
+        ln -sf "$TOOL_BIN" "$HOME/.local/bin/trae"
+        # $INSTALL_BIN alias — the user might have requested --system.
+        if [ "$USE_SYSTEM" -eq 1 ] && [ "$INSTALL_BIN" != "$HOME/.local/bin/trae" ]; then
+            ln -sf "$TOOL_BIN" "$INSTALL_BIN" 2>/dev/null || \
+                echo "  ⚠ Could not create $INSTALL_BIN (run with sudo for --system)" >&2
+        fi
     fi
 else
-    # pipx fallback.
-    pipx install "git+${REPO_URL}" 2>&1 | tail -5
+    # pipx fallback. pipx also uses the entry-point name from pyproject.toml.
+    pipx install "trae-agent[evaluation] @ git+${REPO_URL}" 2>&1 | tail -5
+    TOOL_BIN="$HOME/.local/bin/trae-cli"
+    [ -e "$TOOL_BIN" ] && ln -sf "$TOOL_BIN" "$HOME/.local/bin/trae"
 fi
 
 # --- Check Ollama (optional) --------------------------------------------------
@@ -127,15 +145,23 @@ fi
 # --- Verify -------------------------------------------------------------------
 echo ""
 echo "─────────────────────────────────────────────────────"
-if command -v trae >/dev/null 2>&1; then
+# uv tool installs as `trae-cli` (entry-point name); we also create a `trae` alias.
+# Check for either.
+if command -v trae >/dev/null 2>&1 || command -v trae-cli >/dev/null 2>&1; then
     echo "✓ trae-agent installed successfully!"
     echo ""
+    echo "Both commands are available:"
+    echo "  trae        (alias)"
+    echo "  trae-cli    (canonical entry point)"
+    echo ""
     echo "Quick start:"
-    echo "  trae skills list                  # list available skills"
-    echo "  trae plan \"add tests for utils\"   # read-only plan first"
-    echo "  trae run \"fix the bug in auth\"   # then build & execute"
+    echo "  trae version                    # banner"
+    echo "  trae skills list                # list available skills"
+    echo "  trae plan \"add tests for utils\" # read-only plan first"
+    echo "  trae run \"fix the bug in auth\"  # then build & execute"
 else
-    echo "⚠ Installation finished, but 'trae' is not on PATH."
-    echo "  Add this to your shell rc file:"
+    echo "⚠ Installation finished, but neither 'trae' nor 'trae-cli' is on PATH."
+    echo "  Add this to your shell rc file (~/.zshrc or ~/.bashrc):"
     echo "    export PATH=\"$(dirname "$INSTALL_BIN"):\$PATH\""
+    echo "  Then 'source' the rc file or open a new terminal."
 fi
