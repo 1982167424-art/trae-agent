@@ -251,7 +251,9 @@ class TraeAgent(BaseAgent):
 
             user_message = ""
             if self.docker_config:
-                user_message += r"[Project root path]:\workspace\n\n"
+                user_message += (
+                    f"[Project root path]:\n{self.docker_manager.container_workspace}\n\n"
+                )
             else:
                 user_message += f"[Project root path]:\n{self.project_path}\n\n"
             if "issue" in extra_args:

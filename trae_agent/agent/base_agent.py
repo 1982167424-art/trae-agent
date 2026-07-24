@@ -298,7 +298,7 @@ class BaseAgent(ABC):
                 execution.agent_state = AgentState.COMPLETED
                 execution.final_result = llm_response.content
                 execution.success = True
-                return messages
+                return []
             else:
                 execution.agent_state = AgentState.RUNNING
                 return [LLMMessage(role="user", content=self.task_incomplete_message())]
