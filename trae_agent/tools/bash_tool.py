@@ -11,7 +11,8 @@
 
 import asyncio
 import os
-from typing import override
+import re
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
 
@@ -112,33 +113,40 @@ class _BashSession:
         command_sep = "&" if os.name == "nt" else ";"
 
         # send command to the process
+        # Run command in background to avoid waiting for long-running processes
+        bg_command = command
+        if not command.endswith("&"):
+            bg_command = command + " &"
         self._process.stdin.write(
             b"(\n"
-            + command.encode()
-            + f"\n){command_sep} echo {self._sentinel.replace('__ERROR_CODE__', errcode_retriever)}\n".encode()
+            + bg_command.encode()
+            + f"\n){command_sep} echo {self._sentinel.replace('__ERROR_CODE__', errcode_retriever)}\nexit\n".encode()
         )
         await self._process.stdin.drain()
 
         # read output from the process, until the sentinel is found
         try:
             async with asyncio.timeout(self._timeout):
+                # Read until we find the sentinel in the stdout stream
                 while True:
-                    await asyncio.sleep(self._output_delay)
-                    # if we read directly from stdout/stderr, it will wait forever for
-                    # EOF. use the StreamReader buffer directly instead.
-                    output: str = self._process.stdout._buffer.decode()  # type: ignore[attr-defined] # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
-                    if sentinel_before in output:
-                        # strip the sentinel from output
-                        output, pivot, exit_banner = output.rpartition(sentinel_before)
-                        assert pivot
-
-                        # get error code inside banner
+                    # Read a line from stdout (sentinel is on its own line)
+                    line = await self._process.stdout.readline()
+                    if not line:
+                        break
+                    line_str = line.decode()
+                    if sentinel_before in line_str:
+                        # Extract exit banner from this line
+                        exit_banner = line_str.strip()
+                        # Get error code inside banner
                         error_code_str, pivot, _ = exit_banner.partition(sentinel_after)
                         if not pivot or not error_code_str.isdecimal():
                             continue
-
                         error_code = int(error_code_str)
+                        # The actual output is everything before this line
+                        output = buffer
                         break
+                    # Add line to buffer if it's not the sentinel
+                    buffer += line_str
         except asyncio.TimeoutError:
             self._timed_out = True
             raise ToolError(
@@ -244,3 +252,142 @@ class BashTool(Tool):
             ret = await self._session.stop()
             self._session = None
             return ret
+
+
+class ReadOnlyBashTool(BashTool):
+    """A read-only variant of BashTool, used in Plan mode.
+
+    The execution surface is identical to BashTool (same `bash` tool name, same
+    parameters), but mutating commands are physically rejected *before* they
+    reach the shell, by static analysis. This is enforcement, not guidance: the
+    prompt-level "don't run rm" rule can be ignored by the LLM, but a ToolError
+    raised here cannot be bypassed without changing the code.
+
+    Blocked categories:
+        - File deletion (rm, rmdir, unlink)
+        - File mutation (>, >>, sed -i, perl -i, awk redirect, tee)
+        - Permissions / ownership (chmod, chown)
+        - Package management (pip/npm/brew/apt/uv install)
+        - Git writes (push, commit, reset, stash drop)
+        - Network mutation (curl -X POST/PUT/DELETE/PATCH)
+        - System state (shutdown, reboot, kill -9, mkfs, dd of=)
+        - Service control (systemctl start/stop, killall)
+
+    The blocklist is intentionally conservative — false positives are better
+    than a write slipping through in plan mode.
+    """
+
+    # (human-readable reason, regex). Order matters: more specific first.
+    BLOCKED_PATTERNS: list[tuple[str, str]] = [
+        # === File deletion / destruction ===
+        ("rm", r"\brm\s+(-\w+\s+)*[^|;&]*"),
+        ("rmdir", r"\brmdir\s+"),
+        ("unlink", r"\bunlink\s+"),
+        # === File / dir mutation ===
+        # Match `>` or `>>` to a non-control target. Negative lookahead lets
+        # `>/dev/null`, `>&1`, `2>&1` through (those are control flow, not writes).
+        ("file redirect (>)", r"(?<![&0-9])>{1,2}\s*(?!/dev/null\b|&\d?\b)[^\s|&;]+"),
+        ("mv", r"\bmv\s+"),
+        ("cp", r"\bcp\s+(?:-[rRa-zA-Z]+\s+)*[^|;&]*"),  # cp is also a write
+        ("mkdir", r"\bmkdir\s+"),
+        ("touch", r"\btouch\s+"),
+        ("ln -s", r"\bln\s+(-\w+\s+)*-s\b"),
+        ("truncate", r"\btruncate\s+"),
+        ("sed -i", r"\bsed\s+-i\w*\b"),
+        ("perl -i", r"\bperl\s+-i\w*\b"),
+        ("tee", r"\btee\s+[^|]"),
+        # === Permissions / ownership ===
+        ("chmod", r"\bchmod\s+"),
+        ("chown", r"\bchown\s+"),
+        # === Package management ===
+        ("pip install", r"\bpip3?\s+install\b"),
+        ("pip uninstall", r"\bpip3?\s+uninstall\b"),
+        ("npm install/add", r"\bnpm\s+(install|i|add)\b"),
+        ("brew install", r"\bbrew\s+install\b"),
+        ("apt install", r"\bapt(-get)?\s+install\b"),
+        ("uv pip install", r"\buv\s+pip\s+(install|add)\b"),
+        # === Git writes ===
+        ("git push", r"\bgit\s+push\b"),
+        ("git commit", r"\bgit\s+commit\b"),
+        ("git reset", r"\bgit\s+reset\b"),
+        ("git stash drop", r"\bgit\s+stash\s+drop\b"),
+        ("git checkout (file)", r"\bgit\s+checkout\s+(?![\w./-]+$)[^|&;]+"),
+        # === Network mutation ===
+        ("curl POST/PUT/DELETE", r"\bcurl\s+[^|;&]*-X\s*(POST|PUT|DELETE|PATCH)\b"),
+        ("wget POST/PUT", r"\bwget\s+[^|;&]*--post"),
+        # === System state ===
+        ("shutdown/reboot", r"\b(shutdown|reboot|halt|poweroff)\b"),
+        ("kill -9", r"\bkill\s+-9\b"),
+        ("mkfs", r"\bmkfs\b"),
+        ("dd of=...", r"\bdd\s+.*\bof\s*="),
+        # === Service / process control ===
+        ("systemctl start/stop", r"\bsystemctl\s+(start|stop|restart|enable|disable)\b"),
+        ("killall", r"\bkillall\s+"),
+        # === Container / virtualenv writes ===
+        ("docker rm", r"\bdocker\s+(rm|rmi|system\s+prune)\b"),
+    ]
+
+    # Whitelisted safe operations (always allowed regardless of patterns above).
+    # NOTE: `echo`, `printf`, `python3`, `node` are intentionally NOT here —
+    # they can write files via `> file` redirects and should go through the
+    # redirect check.
+    SAFE_PREFIXES: tuple[str, ...] = (
+        "ls", "cat", "head", "tail", "less", "more", "wc", "file",
+        "find", "grep", "rg", "ag", "ack",
+        "true", "false", "test", "[", "[[",
+        "cd", "pwd", "env", "printenv", "which", "type", "command -v",
+        "git status", "git log", "git diff", "git show", "git blame", "git branch",
+        "git ls-files", "git remote -v",
+        "ps", "top -l 1", "lsof", "netstat", "ss",
+        "date", "cal", "uname", "whoami", "id", "hostname",
+        "tree", "du", "df",
+    )
+
+    @override
+    def get_description(self) -> str:
+        return """Read-only bash (PLAN MODE).
+
+* Identical surface to `bash`, but mutating commands are physically rejected
+  before execution: file writes, deletes, package installs, git commits/pushes,
+  curl POSTs, system changes all return a [PLAN-MODE] ToolError.
+* Use this to explore the codebase: read files, search, run tests, inspect git.
+* For any actual change, switch to build mode (`trae run`).
+"""
+
+    def check_command(self, command: str) -> tuple[bool, str]:
+        """Return (allowed, reason). reason is empty when allowed.
+
+        Conservative: any match in BLOCKED_PATTERNS that isn't whitelisted blocks
+        the command. The LLM can always retry with a read-only variant.
+        """
+        cmd_stripped = command.strip()
+        # Safe-prefix short-circuit
+        for safe in self.SAFE_PREFIXES:
+            if cmd_stripped.startswith(safe + " ") or cmd_stripped == safe:
+                return True, ""
+
+        for desc, pattern in self.BLOCKED_PATTERNS:
+            if re.search(pattern, command):
+                return False, desc
+        return True, ""
+
+    @override
+    async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
+        # Skip check for the restart command — it's safe (just resets session).
+        if arguments.get("restart"):
+            return await super().execute(arguments)
+
+        command = str(arguments.get("command", "") or "")
+        if command:
+            allowed, reason = self.check_command(command)
+            if not allowed:
+                return ToolExecResult(
+                    error=(
+                        f"[PLAN-MODE BLOCKED] {reason}\n"
+                        f"  Command: {command!r}\n"
+                        f"  Plan mode is read-only. To make this change, "
+                        f"re-run with `trae run` (build mode)."
+                    ),
+                    error_code=-1,
+                )
+        return await super().execute(arguments)

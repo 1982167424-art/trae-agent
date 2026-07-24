@@ -178,9 +178,15 @@ class TraeAgent(BaseAgent):
 
         if chosen is not None:
             provider = self._model_config.model_provider.provider
-            self._tools: list[Tool] = [
-                tools_registry[t](model_provider=provider) for t in chosen
-            ]
+            self._tools: list[Tool] = []
+            for t in chosen:
+                # Plan mode: replace `bash` with the read-only variant.
+                if t == "bash" and self.plan_mode:
+                    from trae_agent.tools.bash_tool import ReadOnlyBashTool
+
+                    self._tools.append(ReadOnlyBashTool(model_provider=provider))
+                else:
+                    self._tools.append(tools_registry[t](model_provider=provider))
             # 重新构造 tool_caller 以匹配新工具集
             from trae_agent.tools.base import ToolExecutor
 

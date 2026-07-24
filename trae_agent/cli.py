@@ -853,6 +853,179 @@ def version():
     )
 
 
+@cli.command()
+@click.argument("trajectory_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--config-file",
+    default="trae_config.yaml",
+    help="Path to trae_config.yaml. Provider/model are taken from the saved "
+    "trajectory if the loaded values are missing, but the running agent "
+    "still uses the providers defined in this file.",
+)
+@click.option(
+    "--agent-type",
+    default="trae_agent",
+    show_default=True,
+    help="Agent implementation (currently only `trae_agent` is supported).",
+)
+@click.option(
+    "--provider",
+    default=None,
+    help="Override the LLM provider from the trajectory (e.g. doubao, ollama).",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Override the model id from the trajectory (e.g. qwen2.5-coder:7b).",
+)
+@click.option(
+    "--max-steps",
+    type=int,
+    default=None,
+    help="Override the max-step budget. The resumed run counts steps from "
+    "where the saved trajectory left off, so this is the *additional* "
+    "steps, not the total.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Load and summarize the trajectory without actually running the agent.",
+)
+@click.option(
+    "--trajectory-file-output",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Where to write the new trajectory (default: <name>_resumed_<ts>.json "
+    "next to the original).",
+)
+def resume(
+    trajectory_file: str,
+    config_file: str,
+    agent_type: str,
+    provider: str | None,
+    model: str | None,
+    max_steps: int | None,
+    dry_run: bool,
+    trajectory_file_output: str | None,
+):
+    """Resume an interrupted run from a saved trajectory file.
+
+    TRAJECTORY_FILE is the JSON file written by a previous `trae run` /
+    `trae interactive` (look under `trajectories/`). The agent picks up
+    exactly where it stopped — same task, same message history, same step
+    counter — and continues from the next step.
+    """
+    import asyncio
+    from datetime import datetime
+    from pathlib import Path
+
+    from trae_agent.utils.trajectory_loader import (
+        TrajectoryLoadError,
+        load_trajectory,
+        summarize,
+    )
+
+    # ----- Load + sanity check -----
+    try:
+        traj = load_trajectory(trajectory_file)
+    except TrajectoryLoadError as e:
+        error_text = Text(f"Cannot resume: {e}", style="red")
+        console.print(error_text)
+        sys.exit(1)
+
+    console.print(
+        Panel(
+            f"[bold]Resuming trajectory[/bold]\n\n{summarize(traj)}",
+            title="[cyan]trajectory loaded[/cyan]",
+            border_style="cyan",
+        )
+    )
+
+    if dry_run:
+        console.print("[yellow]--dry-run set; not invoking agent.[/yellow]")
+        return
+
+    # ----- Resolve config + effective provider/model -----
+    config_file = resolve_config_file(config_file)
+    config: Config = (
+        Config.create(config_file=config_file)
+        .resolve_config_values(
+            provider=provider or traj.provider or None,
+            model=model or traj.model or None,
+            max_steps=max_steps,
+        )
+    )
+
+    eff_provider = config.trae_agent.model.model_provider.provider
+    eff_model = config.trae_agent.model.model
+
+    # ----- Pick a console (mirrors `run`) -----
+    console_mode = ConsoleMode.RUN
+    selected_console_type = ConsoleFactory.get_recommended_console_type(console_mode)
+    cli_console = ConsoleFactory.create_console(
+        console_type=selected_console_type, mode=console_mode
+    )
+
+    agent = Agent(
+        agent_type,
+        config,
+        None,  # new trajectory path, set below
+        cli_console,
+    )
+
+    # ----- Restore message history + step counter -----
+    agent.resume_from_messages(
+        messages=traj.last_input_messages,
+        completed_steps=traj.completed_steps,
+    )
+
+    # ----- New trajectory path -----
+    if trajectory_file_output:
+        out_path = Path(trajectory_file_output).expanduser().resolve()
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = traj.trajectory_path.with_name(
+            f"{traj.trajectory_path.stem}_resumed_{ts}.json"
+        )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    agent.set_trajectory_file(str(out_path))
+
+    console.print(
+        f"[blue]Resuming from step {traj.completed_step_count + 1}[/blue]\n"
+        f"[blue]Provider: {eff_provider} | Model: {eff_model}[/blue]\n"
+        f"[blue]New trajectory: {out_path}[/blue]\n"
+    )
+
+    # ----- Run -----
+    task_args = {
+        "project_path": os.getcwd(),
+        "issue": traj.task,
+        "must_patch": "false",
+    }
+    try:
+        execution = asyncio.run(agent.run(traj.task, task_args))
+    except Exception as e:
+        console.print(f"[red]Resume failed: {e}[/red]")
+        sys.exit(1)
+
+    if execution.success:
+        console.print(
+            Panel(
+                f"[green]Resume complete[/green]\n\n{execution.final_result or ''}",
+                border_style="green",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                f"[yellow]Resume finished with state {execution.agent_state}[/yellow]\n\n"
+                f"{execution.final_result or ''}",
+                border_style="yellow",
+            )
+        )
+        sys.exit(2)
+
+
 @cli.group()
 def skills():
     """Manage skills (extensible system-prompt fragments)."""
