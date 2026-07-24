@@ -24,9 +24,17 @@ Inspired by Claude Code and OpenCode's skills/extensions system.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+# Skill name validation: lowercase kebab-case, ASCII letters/digits/dash.
+# Must start with a letter, end with letter or digit. 1-64 chars.
+_SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}[a-z0-9]$")
 
 
 @dataclass
@@ -42,6 +50,14 @@ class Skill:
     @property
     def relative_source(self) -> str:
         return str(self.source_path).replace(str(Path.home()), "~")
+
+
+class SkillValidationError(ValueError):
+    """Raised when a skill file fails structural validation.
+
+    Catches: missing frontmatter, missing name, invalid name format,
+    missing description, empty body, invalid ``tools`` entries.
+    """
 
 
 @dataclass
@@ -110,23 +126,89 @@ def _strip_quotes(s: str) -> str:
 
 
 def load_skill_file(path: Path) -> Skill | None:
-    """Load a single skill from a Markdown file. Returns None on errors."""
+    """Load a single skill from a Markdown file. Returns None on errors.
+
+    Returns ``None`` and logs a warning for invalid skills (this is the
+    lenient path used by ``discover_skills_dir`` so one bad file doesn't
+    break the whole skill set). Use ``validate_skill`` to inspect why a
+    particular file was rejected.
+    """
+    try:
+        skill = validate_skill(path)
+    except SkillValidationError as e:
+        logger.warning("Skipping invalid skill %s: %s", path, e)
+        return None
+    except (OSError, UnicodeDecodeError) as e:
+        logger.warning("Cannot read skill file %s: %s", path, e)
+        return None
+    return skill
+
+
+def validate_skill(path: Path) -> Skill:
+    """Load and *strictly* validate a skill file. Raises on any error.
+
+    Validation rules:
+      - File must have YAML frontmatter delimited by ``---``.
+      - ``name`` must be present, lowercase kebab-case, 1-64 chars.
+      - ``description`` must be present and non-empty (max 500 chars).
+      - Body content must be non-empty (no description-only skills).
+      - ``tools`` (optional) must be a list of strings, each matching
+        a registered tool name when ``known_tool_names`` is provided.
+    """
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
+    except (OSError, UnicodeDecodeError) as e:
+        raise SkillValidationError(f"cannot read file: {e}") from e
 
     meta, body = _parse_frontmatter(text)
-    name = meta.get("name") or path.stem
-    description = meta.get("description", "")
-    allowed_tools = meta.get("tools")  # list or None
+    if not meta:
+        raise SkillValidationError(
+            "missing YAML frontmatter (file must start with `---` and end with `---`)"
+        )
 
-    if not description:
-        description = "(no description)"
+    # --- name ---
+    name = meta.get("name") or path.stem
+    if not isinstance(name, str):
+        raise SkillValidationError(f"`name` must be a string, got {type(name).__name__}")
+    if not _SKILL_NAME_RE.match(name):
+        raise SkillValidationError(
+            f"invalid `name` {name!r}: must be lowercase kebab-case "
+            f"(start with letter, end with letter/digit, 1-64 chars, only [a-z0-9-])"
+        )
+
+    # --- description ---
+    description = meta.get("description", "")
+    if not isinstance(description, str):
+        raise SkillValidationError(
+            f"`description` must be a string, got {type(description).__name__}"
+        )
+    if not description.strip():
+        raise SkillValidationError("`description` is required and must be non-empty")
+    if len(description) > 500:
+        raise SkillValidationError(
+            f"`description` is too long ({len(description)} chars, max 500)"
+        )
+
+    # --- body ---
+    if not body or not body.strip():
+        raise SkillValidationError("body content is empty")
+
+    # --- tools ---
+    allowed_tools = meta.get("tools")
+    if allowed_tools is not None:
+        if not isinstance(allowed_tools, list):
+            raise SkillValidationError(
+                f"`tools` must be a list, got {type(allowed_tools).__name__}"
+            )
+        for t in allowed_tools:
+            if not isinstance(t, str):
+                raise SkillValidationError(
+                    f"`tools` entries must be strings, found {type(t).__name__}"
+                )
 
     return Skill(
         name=name,
-        description=description,
+        description=description.strip(),
         content=body,
         source_path=path,
         allowed_tools=allowed_tools if allowed_tools else None,

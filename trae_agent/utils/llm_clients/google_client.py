@@ -220,8 +220,12 @@ class GoogleClient(BaseLLMClient):
         if not result_content:
             result_content["status"] = "Tool executed successfully but returned no output."
 
-        if not hasattr(tool_result, "name") or not tool_result.name:
+        # P1-10 修复:原代码用 `hasattr(tool_result, "name")` 但 ToolResult
+        # 是 @dataclass,name 字段必填,hasattr 永远为 True,raise 分支
+        # 永远不会触发。简化:只检查 name 是否为空字符串。
+        if not tool_result.name:
             raise AttributeError(
-                "ToolResult must have a 'name' attribute matching the function that was called."
+                "ToolResult must have a non-empty 'name' attribute "
+                "matching the function that was called."
             )
         return types.Part.from_function_response(name=tool_result.name, response=result_content)

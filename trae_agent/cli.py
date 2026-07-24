@@ -1117,6 +1117,52 @@ def skills_open_dir():
         _ = subprocess.Popen(["explorer", str(p)])
 
 
+@cli.group()
+def trajectory():
+    """Inspect and export saved trajectories."""
+    pass
+
+
+@trajectory.command(name="export")
+@click.argument("trajectory_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "html"], case_sensitive=False),
+    default="md",
+    help="Output format (default: md; auto-detected from --output extension).",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Destination path. Default: <trajectory>.md next to the source.",
+)
+def trajectory_export(trajectory_file: str, fmt: str, output: str | None):
+    """Export a trajectory JSON to Markdown or HTML for sharing/review."""
+    from trae_agent.utils.trajectory_exporter import export as _export
+
+    src = Path(trajectory_file).expanduser().resolve()
+    if output is None:
+        out = src.with_suffix("." + fmt.lower())
+    else:
+        out = Path(output).expanduser().resolve()
+
+    try:
+        written = _export(src, out, fmt=fmt.lower())
+    except FileNotFoundError:
+        console.print(f"[red]Trajectory not found: {src}[/red]")
+        sys.exit(1)
+    except (json.JSONDecodeError, ValueError) as e:
+        console.print(f"[red]Cannot parse trajectory: {e}[/red]")
+        sys.exit(1)
+
+    console.print(f"[green]✓ Exported trajectory[/green]")
+    console.print(f"  source: {src}")
+    console.print(f"  output: {written}  ({fmt.upper()})")
+
+
 def main():
     """Main entry point for the CLI."""
     cli()

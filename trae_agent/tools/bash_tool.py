@@ -15,6 +15,7 @@ import re
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
+from trae_agent.utils.output_truncation import truncate as _truncate_output
 
 
 class _BashSession:
@@ -24,7 +25,6 @@ class _BashSession:
     _timed_out: bool
 
     command: str = "/bin/bash"
-    _output_delay: float = 0.2  # seconds
     _timeout: float = 120.0  # seconds
     _sentinel: str = ",,,,bash-command-exit-__ERROR_CODE__-banner,,,,"  # `__ERROR_CODE__` will be replaced by `$?` or `!errorlevel!` later
 
@@ -112,8 +112,16 @@ class _BashSession:
         errcode_retriever = "!errorlevel!" if os.name == "nt" else "$?"
         command_sep = "&" if os.name == "nt" else ";"
 
+        # P1-8 修复:Windows 下 cmd.exe /v:on 启用了"延迟变量展开",这会
+        # 解释用户命令中的 ! 字符(被当成变量),破坏命令内容。
+        # 例如 `echo hello!` 里的 ! 会被吃掉,变成 `echo hello`。
+        # 修法:把用户命令里所有 `!` 替换成 `^^!`(cmd.exe 的转义形式)。
+        # 只对 Windows 平台生效,Unix 不变。
+        if os.name == "nt":
+            command = command.replace("!", "^^!")
+
         # send command to the process
-        # Capture real exit code: run command, wait for it, record $?.
+        # Capture real exit code: run command in subshell, capture $? immediately.
         sentinel_replaced = self._sentinel.replace('__ERROR_CODE__', errcode_retriever)
         if os.name == "nt":
             # Windows: run command, wait, capture errorlevel
@@ -122,61 +130,80 @@ class _BashSession:
                 bg_command = command + " &"
             shell_cmd = f"(\n{bg_command}\n){command_sep} {sentinel_replaced}\nexit\n"
         else:
-            # Unix: run in subshell, wait for background process, capture exit code
-            shell_cmd = f"(\n{command}\n); __exit_code=$?; echo {sentinel_replaced.replace(errcode_retriever, '$__exit_code')}\nexit\n"
+            # Unix: run in subshell, capture exit code immediately after execution.
+            # __ec=$? must come right after the subshell, before any assignment.
+            shell_cmd = f"(\n{command}\n); __ec=$?; echo {sentinel_replaced.replace(errcode_retriever, '$__ec')}\nexit\n"
         self._process.stdin.write(shell_cmd.encode())
         await self._process.stdin.drain()
 
         # read output from the process, until the sentinel is found
         buffer = ""
         output = ""
+        # P1-9 修复:之前 readline() 依赖换行符,如果命令是 `printf hello`
+        # (无换行输出) 或者劫持 stdout,readline 会阻塞到 _timeout(120s)
+        # 才返回,体验差。改用 read(N) 累积 + 主动 sentinel 检测,
+        # 避免依赖换行。
         try:
             async with asyncio.timeout(self._timeout):
-                # Read until we find the sentinel in the stdout stream
                 while True:
-                    # Read a line from stdout (sentinel is on its own line)
-                    line = await self._process.stdout.readline()
-                    if not line:
-                        break
-                    line_str = line.decode()
-                    if sentinel_before in line_str:
-                        # Extract exit banner from this line
-                        exit_banner = line_str.strip()
-                        # Get error code inside banner
-                        error_code_str, pivot, _ = exit_banner.partition(sentinel_after)
-                        if not pivot or not error_code_str.isdecimal():
-                            continue
-                        error_code = int(error_code_str)
-                        # The actual output is everything before this line
+                    # Read whatever is available (up to 64 KiB at a time).
+                    chunk = await self._process.stdout.read(65536)
+                    if not chunk:
+                        # EOF — process closed stdout. Treat any pending
+                        # buffer as output and stop.
                         output = buffer
                         break
-                    # Add line to buffer if it's not the sentinel
-                    buffer += line_str
+                    chunk_str = chunk.decode(errors="replace")
+                    buffer += chunk_str
+                    # Sentinel detection works on the *raw* buffer because
+                    # the sentinel is a unique ASCII string that bash
+                    # echoes verbatim — line-boundary independent.
+                    idx = buffer.find(sentinel_before)
+                    if idx != -1:
+                        start = idx + len(sentinel_before)
+                        end = buffer.find(sentinel_after, start)
+                        if end != -1:
+                            ec_str = buffer[start:end]
+                            if ec_str.isdecimal():
+                                error_code = int(ec_str)
+                                output = buffer[:idx]
+                                # Drop any trailing newline from echo's \n.
+                                if output.endswith("\n"):
+                                    output = output[:-1]
+                                break
         except asyncio.TimeoutError:
             self._timed_out = True
+            # Surface any partial output so the LLM can act on it instead
+            # of seeing a generic "timed out" with no context.
             raise ToolError(
-                f"timed out: bash has not returned in {self._timeout} seconds and must be restarted",
+                f"timed out: bash has not returned in {self._timeout} seconds. "
+                f"Partial output:\n{buffer[:2000]}",
             ) from None
 
-        if output.endswith("\n"):  # pyright: ignore[reportUnknownMemberType]
-            output = output[:-1]  # pyright: ignore[reportUnknownVariableType]
-
+        # Drain stderr. Use the public read() API instead of the private _buffer
+        # attribute (P1-5: _buffer is internal to asyncio.StreamReader and
+        # differs across Python versions). Reading up to 64 KiB is enough
+        # for any realistic error output.
         error: str = ""
         try:
-            error = self._process.stderr._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
-        except (AttributeError, ValueError):
-            pass
-        if error.endswith("\n"):  # pyright: ignore[reportUnknownMemberType]
-            error = error[:-1]  # pyright: ignore[reportUnknownVariableType]
+            # Use a small timeout so a misbehaving command that writes a
+            # huge amount of stderr doesn't block the agent event loop.
+            async with asyncio.timeout(2.0):
+                while True:
+                    err_chunk = await self._process.stderr.read(65536)
+                    if not err_chunk:
+                        break
+                    error += err_chunk.decode(errors="replace")
+        except asyncio.TimeoutError:
+            pass  # best-effort drain
+        if error.endswith("\n"):
+            error = error[:-1]
 
-        # clear the buffers so that the next output can be read correctly
-        try:
-            self._process.stdout._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
-            self._process.stderr._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
-        except AttributeError:
-            pass
-
-        return ToolExecResult(output=output, error=error, error_code=error_code)  # pyright: ignore[reportUnknownArgumentType]
+        return ToolExecResult(
+            output=_truncate_output(output),
+            error=_truncate_output(error),
+            error_code=error_code,
+        )
 
 
 class BashTool(Tool):
@@ -358,15 +385,23 @@ class ReadOnlyBashTool(BashTool):
     # they can write files via `> file` redirects and should go through the
     # redirect check.
     SAFE_PREFIXES: tuple[str, ...] = (
-        "ls", "cat", "head", "tail", "less", "more", "wc", "file",
+        # Read-only file ops
+        "ls", "cat", "head", "tail", "less", "more", "wc", "file", "stat", "readlink",
         "find", "grep", "rg", "ag", "ack",
-        "true", "false", "test", "[", "[[",
-        "cd", "pwd", "env", "printenv", "which", "type", "command -v",
+        # Pure shell builtins / no-ops
+        "echo", "printf", "true", "false", "test", "[", "[[", ":",
+        # Path / env queries
+        "cd", "pwd", "env", "printenv", "which", "type", "command -v", "set",
+        # Git read-only subcommands
         "git status", "git log", "git diff", "git show", "git blame",
-        "git ls-files", "git remote -v",
+        "git ls-files", "git remote -v", "git rev-parse", "git config --get",
+        # Process / network queries
         "ps", "top -l 1", "lsof", "netstat", "ss",
+        # Misc utilities
         "date", "cal", "uname", "whoami", "id", "hostname",
-        "tree", "du", "df",
+        "tree", "du", "df", "uptime", "free",
+        # Help
+        "man", "tldr", "help",
     )
 
     @override
@@ -383,25 +418,33 @@ class ReadOnlyBashTool(BashTool):
     def check_command(self, command: str) -> tuple[bool, str]:
         """Return (allowed, reason). reason is empty when allowed.
 
-        Blacklist is checked FIRST against every segment of a pipeline.
-        Safe-prefix short-circuit only applies to the FIRST command in the
-        pipeline (before any &&, ||, ;, | operators) AND only when no
-        blacklist pattern matched.
+        Default-deny: a command is allowed only if
+            (a) it doesn't match any BLOCKED_PATTERN, AND
+            (b) its FIRST command in any pipeline starts with a SAFE_PREFIX.
+        This is the inverse of the original blacklist-and-default-allow model,
+        which let any command not explicitly listed through (`shred`,
+        `hdiutil`, `osascript`, `xargs rm`, …).
+
+        The blacklist check applies to the *entire* command string so that
+        pipelines like ``cd /tmp && rm -rf ~`` are still caught; the safe
+        prefix only short-circuits the first segment.
         """
-        # 1) Check blacklist against the ENTIRE command (catches cd /tmp && rm -rf ~)
+        # 1) Blacklist — checked against the ENTIRE command so pipelines
+        #    like `cd /tmp && rm -rf ~` are still caught.
         for desc, pattern in self.BLOCKED_PATTERNS:
             if re.search(pattern, command):
                 return False, desc
 
-        # 2) Only if no blacklist match, apply safe-prefix on the first command
+        # 2) Split on shell operators to find the first command. If the
+        #    first command isn't in SAFE_PREFIXES, the command is denied
+        #    even if no blacklist pattern matched.
         cmd_stripped = command.strip()
-        # Split on shell operators to get the first command
         first_cmd = re.split(r"\s*(?:&&|\|\||;|\|)\s*", cmd_stripped, maxsplit=1)[0].strip()
         for safe in self.SAFE_PREFIXES:
-            if first_cmd.startswith(safe + " ") or first_cmd == safe:
+            if first_cmd == safe or first_cmd.startswith(safe + " "):
                 return True, ""
 
-        return True, ""
+        return False, "command not in plan-mode safe-allowlist"
 
     @override
     async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
@@ -413,12 +456,21 @@ class ReadOnlyBashTool(BashTool):
         if command:
             allowed, reason = self.check_command(command)
             if not allowed:
+                hint = (
+                    "Switch to build mode with `trae run` (not `trae plan`) "
+                    "if this is a real mutation."
+                )
+                if reason == "command not in plan-mode safe-allowlist":
+                    hint = (
+                        "Only read-only inspection commands are allowed in plan mode "
+                        "(ls, cat, head, grep, find, git status, etc.). "
+                        "Switch to build mode (`trae run`) to make changes."
+                    )
                 return ToolExecResult(
                     error=(
                         f"[PLAN-MODE BLOCKED] {reason}\n"
                         f"  Command: {command!r}\n"
-                        f"  Plan mode is read-only. To make this change, "
-                        f"re-run with `trae run` (build mode)."
+                        f"  {hint}"
                     ),
                     error_code=-1,
                 )

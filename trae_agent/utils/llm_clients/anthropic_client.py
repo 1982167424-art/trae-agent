@@ -30,12 +30,17 @@ class AnthropicClient(BaseLLMClient):
     @override
     def set_chat_history(self, messages: list[LLMMessage]) -> None:
         """Set the chat history."""
-        self.message_history = self.parse_messages(messages)
+        # P0-4 修复:parse_messages 现在返回 (messages, system_message) tuple。
+        # set_chat_history 只关心 message_history,丢弃 system 部分(它由
+        # 每次 chat() 调用时从 messages 重新提取)。
+        parsed_messages, _ = self.parse_messages(messages)
+        self.message_history = parsed_messages
 
     def _create_anthropic_response(
         self,
         model_config: ModelConfig,
         tool_schemas: list[anthropic.types.ToolUnionParam] | anthropic.NotGiven,
+        system_message: str | anthropic.NotGiven = anthropic.NOT_GIVEN,
     ) -> anthropic.types.Message:
         """Create a response using Anthropic API. This method will be decorated with retry logic."""
         return self.client.messages.create(
@@ -43,7 +48,9 @@ class AnthropicClient(BaseLLMClient):
             messages=self.message_history,
             # max_tokens 是 Anthropic 必填项;config 默认 None 时必须给一个兜底值。
             max_tokens=model_config.max_tokens or 4096,
-            system=self.system_message,
+            # P0-4 修复:从 chat() 调用方传入的局部变量读取 system prompt,
+            # 不再依赖 self.system_message(被 parse_messages 直接改的实例状态)。
+            system=system_message,
             tools=tool_schemas,
             temperature=model_config.temperature,
             top_p=model_config.top_p,
@@ -60,12 +67,14 @@ class AnthropicClient(BaseLLMClient):
         reuse_history: bool = True,
     ) -> LLMResponse:
         """Send chat messages to Anthropic with optional tool support."""
-        # Convert messages to Anthropic format
-        anthropic_messages: list[anthropic.types.MessageParam] = self.parse_messages(messages)
+        # P0-4 修复:之前每次 chat() 都直接修改 self.system_message,
+        # 同一个 client 实例被复用于多个任务时,上一个任务的 system prompt
+        # 会污染下一个任务。现在改为局部变量 + 提取后传 API。
+        parsed_messages, system_message = self.parse_messages(messages)
 
         # Agent sends the full accumulated message history on each call.
         # Replace history to avoid duplication.
-        self.message_history = anthropic_messages
+        self.message_history = parsed_messages
 
         # Add tools if provided
         tool_schemas: list[anthropic.types.ToolUnionParam] | anthropic.NotGiven = (
@@ -100,7 +109,7 @@ class AnthropicClient(BaseLLMClient):
             provider_name="Anthropic",
             max_retries=model_config.max_retries,
         )
-        response = retry_decorator(model_config, tool_schemas)
+        response = retry_decorator(model_config, tool_schemas, system_message)
 
         # Handle tool calls in response
         content = ""
@@ -159,12 +168,28 @@ class AnthropicClient(BaseLLMClient):
 
         return llm_response
 
-    def parse_messages(self, messages: list[LLMMessage]) -> list[anthropic.types.MessageParam]:
-        """Parse the messages to Anthropic format."""
+    def parse_messages(
+        self, messages: list[LLMMessage]
+    ) -> tuple[list[anthropic.types.MessageParam], str | anthropic.NotGiven]:
+        """Parse messages to Anthropic format.
+
+        Returns a tuple ``(anthropic_messages, system_message)`` so callers
+        can pass the system message to the API without mutating instance
+        state (P0-4 fix).
+        """
         anthropic_messages: list[anthropic.types.MessageParam] = []
+        system_message: str | anthropic.NotGiven = anthropic.NOT_GIVEN
         for msg in messages:
             if msg.role == "system":
-                self.system_message = msg.content if msg.content else anthropic.NOT_GIVEN
+                # P0-4 修复:用局部变量累积 system prompt,不修改 self。
+                # Anthropic API 的 system 参数只接受一条字符串,所以多个
+                # system 消息会被 join 起来(取第一个非空的;若有多个则用
+                # \n\n 拼起来)。
+                if msg.content:
+                    if system_message is anthropic.NOT_GIVEN:
+                        system_message = msg.content
+                    elif isinstance(system_message, str):
+                        system_message = system_message + "\n\n" + msg.content
             elif msg.tool_result:
                 anthropic_messages.append(
                     anthropic.types.MessageParam(
@@ -192,7 +217,7 @@ class AnthropicClient(BaseLLMClient):
                 anthropic_messages.append(
                     anthropic.types.MessageParam(role=role, content=msg.content)
                 )
-        return anthropic_messages
+        return anthropic_messages, system_message
 
     def parse_tool_call(self, tool_call: ToolCall) -> anthropic.types.ToolUseBlockParam:
         """Parse the tool call from the LLM response."""

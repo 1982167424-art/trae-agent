@@ -124,9 +124,17 @@ class TraeAgent(BaseAgent):
     async def discover_mcp_tools(self):
         if self.mcp_servers_config:
             for mcp_server_name, mcp_server_config in self.mcp_servers_config.items():
-                if self.allow_mcp_servers is None:
-                    return
-                if mcp_server_name not in self.allow_mcp_servers:
+                # P1-6 修复:之前的逻辑是 `allow_mcp_servers is None → return`，
+                # 这把"None = 不限制"误读成"None = 全部跳过",结果用户配
+                # 了 MCP server 但不写 allow_mcp_servers 时,所有 server 都
+                # 不会被发现。正确语义:
+                #   - None  : 不限制 → 允许所有 server
+                #   - []    : 显式空列表 → 拒绝所有 server
+                #   - [a,b] : 仅允许列表中的 server
+                if self.allow_mcp_servers is not None and (
+                    not self.allow_mcp_servers
+                    or mcp_server_name not in self.allow_mcp_servers
+                ):
                     continue
                 mcp_client = MCPClient()
                 try:

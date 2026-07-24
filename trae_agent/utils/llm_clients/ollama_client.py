@@ -9,7 +9,6 @@ import json
 import uuid
 from typing_extensions import override
 
-import openai
 from ollama import chat as ollama_chat  # pyright: ignore[reportUnknownVariableType]
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
@@ -23,14 +22,9 @@ class OllamaClient(BaseLLMClient):
     def __init__(self, model_config: ModelConfig):
         super().__init__(model_config)
 
-        self.client: openai.OpenAI = openai.OpenAI(
-            # by default ollama doesn't require any api key. It should set to be "ollama".
-            api_key=self.api_key,
-            base_url=model_config.model_provider.base_url
-            if model_config.model_provider.base_url
-            else "http://localhost:11434/v1",
-        )
-
+        # P0-3 修复:之前这里创建了 openai.OpenAI 客户端但从未使用 — 实际
+        # 的 LLM 调用走 ollama_python 的 `ollama.chat()`,self.client
+        # 完全 dead code。删掉,避免误导。
         self.message_history: list[dict] = []
 
     @override

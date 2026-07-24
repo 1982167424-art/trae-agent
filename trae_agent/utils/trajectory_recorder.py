@@ -17,7 +17,7 @@
 import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -64,7 +64,8 @@ class TrajectoryRecorder:
         # P1-13: 用 dict 索引替代 list 遍历
         self._agent_steps_by_num: dict[int, dict[str, Any]] = {}
         self._start_time: datetime | None = None
-        self._async_save_pending: bool = False
+        # P1-7: 跟踪最近一次 _async_save 的 Future,让 _sync_save 可以等它完成
+        self._pending_future: Future | None = None
 
     # -------- public API -----------------------------------------------------
 
@@ -208,22 +209,29 @@ class TrajectoryRecorder:
         """异步写盘,不阻塞 agent 主循环。
         P0-7 修复:之前每步同步 json.dump(全量) 阻塞 event loop。
         改为丢进 thread pool,主路径立即返回。
-        P1-6 修复:用 _async_save_pending 标志防止快照竞态覆盖。
+        P1-7 修复:追踪 Future 对象而不是布尔标志 — finalize 同步写时
+        必须先等所有 pending async save 完成,否则 async save 写的老快照
+        会覆盖 finalize 的新快照。
         """
-        if self._async_save_pending:
+        if self._pending_future is not None and not self._pending_future.done():
             return  # 已有待写入的快照,跳过本次
-        self._async_save_pending = True
         snapshot = self._snapshot()
         path = self.trajectory_path
-
-        def _done_callback(_future):
-            self._async_save_pending = False
-
-        future = _write_pool.submit(self._do_write, snapshot, path)
-        future.add_done_callback(_done_callback)
+        self._pending_future = _write_pool.submit(self._do_write, snapshot, path)
 
     def _sync_save(self) -> None:
-        """finalize 时同步写,确保数据落盘再返回。"""
+        """finalize 时同步写,确保数据落盘再返回。
+
+        P1-7 修复:先 drain 所有 pending async save,再写最终快照。否则
+        最后一次 async save 还在写老快照,可能覆盖这里的最终快照。
+        """
+        if self._pending_future is not None:
+            try:
+                # 阻塞等异步写盘完成;10s 兜底超时,避免 finalize 卡死。
+                self._pending_future.result(timeout=10.0)
+            except Exception as e:
+                logger.warning("Pending async save did not complete cleanly: %s", e)
+            self._pending_future = None
         self._do_write(self._snapshot(), self.trajectory_path)
 
     def _snapshot(self) -> dict[str, Any]:
@@ -268,7 +276,9 @@ class TrajectoryRecorder:
 
     def _serialize_tool_result(self, tool_result: ToolResult) -> dict[str, Any]:
         return {
-            "call_id": tool_result.call_call_id if hasattr(tool_result, "call_call_id") else tool_result.call_id,
+            # P2-11 修复:之前用 `tool_result.call_call_id` 永远返回 AttributeError
+            # (ToolResult dataclass 没有这个字段)。fallback 到 `call_id` 即可。
+            "call_id": getattr(tool_result, "call_id", None),
             "success": tool_result.success,
             "result": tool_result.result,
             "error": tool_result.error,

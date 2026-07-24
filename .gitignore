@@ -200,3 +200,6 @@ models/**/.cache/
 # Keep Modelfile and other text configs
 !models/**/Modelfile
 !models/**/*.md
+
+# Stray nested clones
+/trae-agent/
