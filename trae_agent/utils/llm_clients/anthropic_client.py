@@ -63,9 +63,9 @@ class AnthropicClient(BaseLLMClient):
         # Convert messages to Anthropic format
         anthropic_messages: list[anthropic.types.MessageParam] = self.parse_messages(messages)
 
-        self.message_history = (
-            self.message_history + anthropic_messages if reuse_history else anthropic_messages
-        )
+        # Agent sends the full accumulated message history on each call.
+        # Replace history to avoid duplication.
+        self.message_history = anthropic_messages
 
         # Add tools if provided
         tool_schemas: list[anthropic.types.ToolUnionParam] | anthropic.NotGiven = (

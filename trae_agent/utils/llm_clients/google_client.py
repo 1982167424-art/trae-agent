@@ -59,10 +59,9 @@ class GoogleClient(BaseLLMClient):
 
         current_system_instruction = system_instruction_from_message or self.system_instruction
 
-        if reuse_history:
-            current_chat_contents = self.message_history + newly_parsed_messages
-        else:
-            current_chat_contents = newly_parsed_messages
+        # Agent sends the full accumulated message history on each call.
+        # Only use the agent-provided messages to avoid duplication.
+        current_chat_contents = newly_parsed_messages
 
         # Set up generation config
         generation_config = types.GenerateContentConfig(
@@ -121,10 +120,9 @@ class GoogleClient(BaseLLMClient):
                             )
                         )
 
-        if reuse_history:
-            new_history = self.message_history + newly_parsed_messages
-        else:
-            new_history = newly_parsed_messages
+        # Agent sends the full accumulated message history on each call.
+        # Replace history instead of concatenating to avoid duplication.
+        new_history = newly_parsed_messages
 
         if assistant_response_content:
             new_history.append(assistant_response_content)
@@ -180,7 +178,7 @@ class GoogleClient(BaseLLMClient):
             elif msg.tool_result:
                 gemini_messages.append(
                     types.Content(
-                        role="tool",
+                        role="user",
                         parts=[self.parse_tool_call_result(msg.tool_result)],
                     )
                 )

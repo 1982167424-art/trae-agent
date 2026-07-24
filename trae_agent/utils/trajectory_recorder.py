@@ -64,6 +64,7 @@ class TrajectoryRecorder:
         # P1-13: 用 dict 索引替代 list 遍历
         self._agent_steps_by_num: dict[int, dict[str, Any]] = {}
         self._start_time: datetime | None = None
+        self._async_save_pending: bool = False
 
     # -------- public API -----------------------------------------------------
 
@@ -207,10 +208,19 @@ class TrajectoryRecorder:
         """异步写盘,不阻塞 agent 主循环。
         P0-7 修复:之前每步同步 json.dump(全量) 阻塞 event loop。
         改为丢进 thread pool,主路径立即返回。
+        P1-6 修复:用 _async_save_pending 标志防止快照竞态覆盖。
         """
+        if self._async_save_pending:
+            return  # 已有待写入的快照,跳过本次
+        self._async_save_pending = True
         snapshot = self._snapshot()
         path = self.trajectory_path
-        _write_pool.submit(self._do_write, snapshot, path)
+
+        def _done_callback(_future):
+            self._async_save_pending = False
+
+        future = _write_pool.submit(self._do_write, snapshot, path)
+        future.add_done_callback(_done_callback)
 
     def _sync_save(self) -> None:
         """finalize 时同步写,确保数据落盘再返回。"""

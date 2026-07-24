@@ -70,10 +70,14 @@ class OpenAIClient(BaseLLMClient):
         """Send chat messages to OpenAI with optional tool support."""
         openai_messages: ResponseInputParam = self.parse_messages(messages)
 
-        if reuse_history:
-            self.message_history = self.message_history + openai_messages
-        else:
-            self.message_history = openai_messages
+        # Agent sends the full accumulated message history on each call.
+        # Replace history to avoid duplication.
+        self.message_history = openai_messages
+
+        # P1-7 修复:Resume 时消息历史可能包含孤立的 function_call
+        # (没有对应的 function_call_output),OpenAI API 会拒绝。
+        # 清理:收集所有有对应 output 的 call_id,移除孤立的 function_call。
+        self.message_history = self._sanitize_orphaned_function_calls(self.message_history)
 
         tool_schemas = None
         if tools:
@@ -217,3 +221,40 @@ class OpenAIClient(BaseLLMClient):
             call_id=tool_call_result.call_id,
             output=result_content,
         )
+
+    @staticmethod
+    def _sanitize_orphaned_function_calls(
+        messages: ResponseInputParam,
+    ) -> ResponseInputParam:
+        """Remove orphaned function_call entries that lack a matching output.
+
+        When resuming from a saved trajectory, the message history may contain
+        function_call blocks whose corresponding function_call_output was never
+        recorded (interruption happened mid-tool-call). The OpenAI Responses API
+        rejects such malformed histories. This method filters them out.
+        """
+        # Collect call_ids that have matching outputs
+        output_call_ids: set[str] = set()
+        for msg in messages:
+            if isinstance(msg, dict) and msg.get("type") == "function_call_output":
+                output_call_ids.add(msg.get("call_id", ""))
+            elif hasattr(msg, "call_id") and hasattr(msg, "type"):
+                # FunctionCallOutput object
+                if msg.type == "function_call_output":
+                    output_call_ids.add(msg.call_id)
+
+        sanitized: ResponseInputParam = []
+        for msg in messages:
+            # Check if this is a function_call without a matching output
+            is_orphaned = False
+            if isinstance(msg, dict) and msg.get("type") == "function_call":
+                if msg.get("call_id") not in output_call_ids:
+                    is_orphaned = True
+            elif hasattr(msg, "type") and msg.type == "function_call":
+                if not hasattr(msg, "call_id") or msg.call_id not in output_call_ids:
+                    is_orphaned = True
+
+            if not is_orphaned:
+                sanitized.append(msg)
+
+        return sanitized

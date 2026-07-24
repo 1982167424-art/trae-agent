@@ -113,6 +113,9 @@ class TraeAgent(BaseAgent):
 
     async def initialise_mcp(self):
         """Async factory to create and initialize TraeAgent."""
+        # Plan mode: skip MCP tool discovery — plan mode only allows read-only tools.
+        if self.plan_mode:
+            return
         await self.discover_mcp_tools()
 
         if self.mcp_tools:

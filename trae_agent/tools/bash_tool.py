@@ -113,15 +113,18 @@ class _BashSession:
         command_sep = "&" if os.name == "nt" else ";"
 
         # send command to the process
-        # Run command in background to avoid waiting for long-running processes
-        bg_command = command
-        if not command.endswith("&"):
-            bg_command = command + " &"
-        self._process.stdin.write(
-            b"(\n"
-            + bg_command.encode()
-            + f"\n){command_sep} echo {self._sentinel.replace('__ERROR_CODE__', errcode_retriever)}\nexit\n".encode()
-        )
+        # Capture real exit code: run command, wait for it, record $?.
+        sentinel_replaced = self._sentinel.replace('__ERROR_CODE__', errcode_retriever)
+        if os.name == "nt":
+            # Windows: run command, wait, capture errorlevel
+            bg_command = command
+            if not command.endswith("&"):
+                bg_command = command + " &"
+            shell_cmd = f"(\n{bg_command}\n){command_sep} {sentinel_replaced}\nexit\n"
+        else:
+            # Unix: run in subshell, wait for background process, capture exit code
+            shell_cmd = f"(\n{command}\n); __exit_code=$?; echo {sentinel_replaced.replace(errcode_retriever, '$__exit_code')}\nexit\n"
+        self._process.stdin.write(shell_cmd.encode())
         await self._process.stdin.drain()
 
         # read output from the process, until the sentinel is found
@@ -380,18 +383,24 @@ class ReadOnlyBashTool(BashTool):
     def check_command(self, command: str) -> tuple[bool, str]:
         """Return (allowed, reason). reason is empty when allowed.
 
-        Conservative: any match in BLOCKED_PATTERNS that isn't whitelisted blocks
-        the command. The LLM can always retry with a read-only variant.
+        Blacklist is checked FIRST against every segment of a pipeline.
+        Safe-prefix short-circuit only applies to the FIRST command in the
+        pipeline (before any &&, ||, ;, | operators) AND only when no
+        blacklist pattern matched.
         """
-        cmd_stripped = command.strip()
-        # Safe-prefix short-circuit
-        for safe in self.SAFE_PREFIXES:
-            if cmd_stripped.startswith(safe + " ") or cmd_stripped == safe:
-                return True, ""
-
+        # 1) Check blacklist against the ENTIRE command (catches cd /tmp && rm -rf ~)
         for desc, pattern in self.BLOCKED_PATTERNS:
             if re.search(pattern, command):
                 return False, desc
+
+        # 2) Only if no blacklist match, apply safe-prefix on the first command
+        cmd_stripped = command.strip()
+        # Split on shell operators to get the first command
+        first_cmd = re.split(r"\s*(?:&&|\|\||;|\|)\s*", cmd_stripped, maxsplit=1)[0].strip()
+        for safe in self.SAFE_PREFIXES:
+            if first_cmd.startswith(safe + " ") or first_cmd == safe:
+                return True, ""
+
         return True, ""
 
     @override
