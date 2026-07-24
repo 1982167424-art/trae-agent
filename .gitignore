@@ -184,6 +184,11 @@ trae_config.yaml
 .vscode/
 !.vscode/launch.template.json
 
+# Node modules (Playwright MCP 本地安装)
+node_modules/
+package-lock.json
+
+
 # Patch selection python binary
 py312/
 
