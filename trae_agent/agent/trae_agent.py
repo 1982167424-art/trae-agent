@@ -26,6 +26,52 @@ TraeAgentToolNames = [
     "bash",
 ]
 
+# Plan mode: read-only tool set. file mutation tools are excluded.
+TraeAgentPlanToolNames = [
+    "bash",
+    "sequentialthinking",
+    "task_done",
+]
+
+# Plan mode system prompt — appended after the main prompt.
+TRAE_AGENT_PLAN_PROMPT = """
+
+# Plan Mode
+
+You are currently running in **PLAN MODE** — a read-only exploration mode,
+analogous to Claude Code's plan mode.
+
+## Hard rules
+- **Do NOT modify any files.** Do not use any file-edit / write tools.
+- **Do NOT run mutation commands** (no `git commit`, `rm`, `mv`, install,
+  curl-write, npm/pip install, etc.). bash is restricted to read-only
+  inspection (cat, ls, grep, find, sed -n, head, tail, wc, file, tree).
+- **Do NOT start long-running processes** (`python server.py`, `npm run dev`).
+
+## What you SHOULD do
+- Read the user's request carefully.
+- Explore the repository: list files, grep for symbols, read key modules.
+- Build a concrete plan: which files to change, what to change, why.
+- Present the plan as a numbered list of steps.
+
+## Output format
+
+```
+## Summary
+<one-sentence goal>
+
+## Steps
+1. <step> — touches <file:line> — <reason>
+2. ...
+
+## Risks
+- <risk + mitigation>
+
+## Out of scope
+- <explicitly NOT doing these things>
+```
+"""
+
 
 class TraeAgent(BaseAgent):
     """Trae Agent specialized for software engineering tasks."""
@@ -58,6 +104,9 @@ class TraeAgent(BaseAgent):
         self.mcp_tools: list[Tool] = []
         self.mcp_clients: list[MCPClient] = []  # Keep track of MCP clients for cleanup
         self.docker_config = docker_config
+        # Plan mode flag — restricts available tools and appends PLAN prompt.
+        # Set externally before calling new_task().
+        self.plan_mode: bool = False
         super().__init__(
             agent_config=trae_agent_config, docker_config=docker_config, docker_keep=docker_keep
         )
@@ -110,7 +159,10 @@ class TraeAgent(BaseAgent):
         self._task: str = task
 
         if tool_names is None and len(self._tools) == 0:
-            tool_names = TraeAgentToolNames
+            if self.plan_mode:
+                tool_names = TraeAgentPlanToolNames
+            else:
+                tool_names = TraeAgentToolNames
 
             # Get the model provider from the LLM client
             provider = self._model_config.model_provider.provider
@@ -121,6 +173,21 @@ class TraeAgent(BaseAgent):
 
         self._initial_messages: list[LLMMessage] = []
         self._initial_messages.append(LLMMessage(role="system", content=self.get_system_prompt()))
+
+        # Optional: append loaded Skills as a second system message.
+        try:
+            from trae_agent.skills.loader import load_all_skills, skills_to_system_message
+
+            project_dir = extra_args.get("project_path") if extra_args else None
+            skills = load_all_skills(project_dir=project_dir)
+            skills_block = skills_to_system_message(skills)
+            if skills_block:
+                self._initial_messages.append(
+                    LLMMessage(role="system", content=skills_block)
+                )
+        except Exception:
+            # Skills are optional; never fail the agent on a skill error.
+            pass
 
         user_message = ""
         if not extra_args:
@@ -171,6 +238,8 @@ class TraeAgent(BaseAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for TraeAgent."""
+        if self.plan_mode:
+            return TRAE_AGENT_SYSTEM_PROMPT + TRAE_AGENT_PLAN_PROMPT
         return TRAE_AGENT_SYSTEM_PROMPT
 
     @override
