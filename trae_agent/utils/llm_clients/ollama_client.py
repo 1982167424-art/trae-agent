@@ -7,7 +7,7 @@ Ollama API client wrapper with tool integration
 
 import json
 import uuid
-from typing import override
+from typing_extensions import override
 
 import openai
 from ollama import chat as ollama_chat  # pyright: ignore[reportUnknownVariableType]

@@ -6,7 +6,7 @@
 import json
 import traceback
 import uuid
-from typing import override
+from typing_extensions import override
 
 from google import genai
 from google.genai import types

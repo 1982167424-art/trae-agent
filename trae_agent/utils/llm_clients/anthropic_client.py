@@ -4,7 +4,7 @@
 """Anthropic API client wrapper with tool integration."""
 
 import json
-from typing import override
+from typing_extensions import override
 
 import anthropic
 from anthropic.types.tool_union_param import TextEditor20250429

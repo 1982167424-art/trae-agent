@@ -44,3 +44,29 @@ def stream_chat_completion(payload: dict, timeout: float = 300.0):
                     yield line[5:].lstrip()
                 else:
                     yield line
+
+
+async def stream_chat_completion_async(payload: dict, timeout: float = 300.0):
+    """P0-4 修复:异步真流式。yield SSE 行(带 'data: ' 前缀)。
+
+    httpx.AsyncClient.stream + aiter_lines 真正边读边 yield,不再把整个
+    生成器 list() 进内存再 yield(原实现等同于一次性返回)。
+    """
+    payload = {**payload, "model": MIMO_MODEL, "stream": True}
+    headers = _headers()
+    headers["Accept"] = "text/event-stream"
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        async with c.stream(
+            "POST", f"{MIMO_BASE_URL}/chat/completions", headers=headers, json=payload
+        ) as r:
+            if r.status_code >= 400:
+                body = (await r.aread()).decode("utf-8", "ignore")[:500]
+                raise RuntimeError(f"MiMo API {r.status_code}: {body}")
+            async for line in r.aiter_lines():
+                if not line:
+                    continue
+                if line.startswith("data:"):
+                    # 重组成 'data: <payload>\n\n' 让客户端能直接解析。
+                    yield f"data: {line[5:].lstrip()}\n\n"
+                else:
+                    yield f"{line}\n\n"

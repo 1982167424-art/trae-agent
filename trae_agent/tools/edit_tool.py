@@ -10,7 +10,7 @@
 # This modified file is released under the same license.
 
 from pathlib import Path
-from typing import override
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
 from trae_agent.tools.run import maybe_truncate, run

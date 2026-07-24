@@ -45,12 +45,41 @@ fi
 
 if [ "$UNINSTALL" -eq 1 ]; then
     echo "Uninstalling trae-agent..."
-    if [ -e "$INSTALL_BIN" ]; then
-        rm -f "$INSTALL_BIN"
-        echo "Removed: $INSTALL_BIN"
-    else
-        echo "Nothing to remove at $INSTALL_BIN"
+
+    # P1-4 修复:完整删除所有安装产物,避免遗留文件。
+    # uv tool 装到自己的隔离 venv,需要 `uv tool uninstall` 删包 + 删可执行文件;
+    # 我们额外手工删自己创建的 ~/.local/bin/trae 别名链接。
+    if command -v uv >/dev/null 2>&1 || [ -x "$HOME/.local/bin/uv" ]; then
+        UV_BIN=$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")
+        "$UV_BIN" tool uninstall trae-agent 2>&1 | tail -3 || true
     fi
+    if command -v pipx >/dev/null 2>&1; then
+        pipx uninstall trae-agent 2>&1 | tail -3 || true
+    fi
+
+    # 删别名/可执行文件(P1-4)
+    for target in \
+        "$HOME/.local/bin/trae" \
+        "$HOME/.local/bin/trae-cli" \
+        "/usr/local/bin/trae" \
+        "/usr/local/bin/trae-cli"; do
+        if [ -e "$target" ]; then
+            if [ -w "$(dirname "$target")" ]; then
+                rm -f "$target" && echo "Removed: $target"
+            else
+                sudo rm -f "$target" 2>/dev/null && echo "Removed (sudo): $target"
+            fi
+        fi
+    done
+
+    # 清理 ~/.local/share/uv/tools/trae-agent 残留(uv tool uninstall 通常
+    # 会处理,但兜底以防失败)
+    if [ -d "$HOME/.local/share/uv/tools/trae-agent" ]; then
+        rm -rf "$HOME/.local/share/uv/tools/trae-agent"
+        echo "Removed: $HOME/.local/share/uv/tools/trae-agent"
+    fi
+
+    echo "Uninstall complete."
     exit 0
 fi
 
@@ -122,8 +151,16 @@ if [ -n "$UV" ]; then
         ln -sf "$TOOL_BIN" "$HOME/.local/bin/trae"
         # $INSTALL_BIN alias — the user might have requested --system.
         if [ "$USE_SYSTEM" -eq 1 ] && [ "$INSTALL_BIN" != "$HOME/.local/bin/trae" ]; then
-            ln -sf "$TOOL_BIN" "$INSTALL_BIN" 2>/dev/null || \
-                echo "  ⚠ Could not create $INSTALL_BIN (run with sudo for --system)" >&2
+            # P1-5 修复:/usr/local/bin 通常需要 sudo,普通用户裸 ln 会失败,
+            # 旧脚本只打 ⚠ 然后继续,会让用户误以为安装成功。这里明确报错并 exit。
+            if [ -w "$(dirname "$INSTALL_BIN")" ]; then
+                ln -sf "$TOOL_BIN" "$INSTALL_BIN"
+            else
+                echo "  ✗ --system requested but $(dirname "$INSTALL_BIN") is not writable." >&2
+                echo "    Re-run with sudo, or omit --system to use ~/.local/bin." >&2
+                echo "    (trae is already available at $HOME/.local/bin/trae)" >&2
+                exit 1
+            fi
         fi
     fi
 else

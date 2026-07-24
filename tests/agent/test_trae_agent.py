@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from trae_agent.agent.agent_basics import AgentError
 from trae_agent.agent.trae_agent import TraeAgent
 from trae_agent.utils.config import Config
-from trae_agent.utils.legacy_config import LegacyConfig
+from trae_agent.utils.legacy.legacy_config import LegacyConfig
 from trae_agent.utils.llm_clients.llm_basics import LLMResponse
 
 

@@ -4,7 +4,7 @@
 """OpenAI API client wrapper with tool integration."""
 
 import json
-from typing import override
+from typing_extensions import override
 
 import openai
 from openai.types.responses import (

@@ -5,7 +5,7 @@
 
 import json
 from abc import ABC, abstractmethod
-from typing import override
+from typing_extensions import override
 
 import openai
 from openai.types.chat import (

@@ -347,6 +347,9 @@ class BaseAgent(ABC):
             # Display reflection
             self._update_cli_console(step)
 
-            messages.append(LLMMessage(role="assistant", content=reflection))
+            # P1-15 修复:reflection 是"工具失败 → 用户视角反馈",
+            # 语义是 role="user"(让模型知道 tool output 不行),而不是
+            # role="assistant"(否则破坏 user/assistant 交替,部分 provider 会拒绝)。
+            messages.append(LLMMessage(role="user", content=reflection))
 
         return messages

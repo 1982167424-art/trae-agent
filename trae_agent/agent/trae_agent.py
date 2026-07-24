@@ -7,7 +7,7 @@ import asyncio
 import contextlib
 import os
 import subprocess
-from typing import override
+from typing_extensions import override
 
 from trae_agent.agent.agent_basics import AgentError, AgentExecution
 from trae_agent.agent.base_agent import BaseAgent
@@ -158,18 +158,33 @@ class TraeAgent(BaseAgent):
         """Create a new task."""
         self._task: str = task
 
-        if tool_names is None and len(self._tools) == 0:
-            if self.plan_mode:
-                tool_names = TraeAgentPlanToolNames
-            else:
-                tool_names = TraeAgentToolNames
+        # Decide which tools to instantiate for THIS task.
+        #
+        # P1-1 修复:之前条件是 `tool_names is None and len(self._tools) == 0`,
+        # 但 BaseAgent.__init__ 已经把 agent_config.tools 实例化过了,所以
+        # `len == 0` 几乎永不成立,plan_mode 永远走不到 TraeAgentPlanToolNames,
+        # plan mode 实际失效。
+        #
+        # 新规则:
+        #   1. 显式传 tool_names: 用它(完整覆盖)
+        #   2. plan_mode 启用: 强制用 plan 工具集(覆盖既有)
+        #   3. 否则: 保持 BaseAgent.__init__ 已建好的工具
+        if tool_names is not None:
+            chosen = tool_names
+        elif self.plan_mode:
+            chosen = TraeAgentPlanToolNames
+        else:
+            chosen = None
 
-            # Get the model provider from the LLM client
+        if chosen is not None:
             provider = self._model_config.model_provider.provider
             self._tools: list[Tool] = [
-                tools_registry[tool_name](model_provider=provider) for tool_name in tool_names
+                tools_registry[t](model_provider=provider) for t in chosen
             ]
-        # self._tool_caller: ToolExecutor = ToolExecutor(self._tools)
+            # 重新构造 tool_caller 以匹配新工具集
+            from trae_agent.tools.base import ToolExecutor
+
+            self._tool_caller = ToolExecutor(self._tools)
 
         self._initial_messages: list[LLMMessage] = []
         self._initial_messages.append(LLMMessage(role="system", content=self.get_system_prompt()))
@@ -247,23 +262,25 @@ class TraeAgent(BaseAgent):
         return None
 
     def get_git_diff(self) -> str:
-        """Get the git diff of the project."""
-        pwd = os.getcwd()
+        """Get the git diff of the project.
+
+        P1-6 修复:不再用 os.chdir 改全局 cwd(异步并发任务 A/B 互相串),
+        改用 subprocess.run(..., cwd=self.project_path)。
+        """
         if not os.path.isdir(self.project_path):
             return ""
-        os.chdir(self.project_path)
+        cmd = ["git", "--no-pager", "diff"]
+        if self.base_commit:
+            cmd += [self.base_commit, "HEAD"]
         try:
-            if not self.base_commit:
-                stdout = subprocess.check_output(["git", "--no-pager", "diff"]).decode()
-            else:
-                stdout = subprocess.check_output(
-                    ["git", "--no-pager", "diff", self.base_commit, "HEAD"]
-                ).decode()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            stdout = ""
-        finally:
-            os.chdir(pwd)
-        return stdout
+            return subprocess.run(
+                cmd,
+                cwd=self.project_path,
+                capture_output=True,
+                check=False,
+            ).stdout.decode()
+        except FileNotFoundError:
+            return ""
 
     # Copyright (c) 2024 paul-gauthier
     # SPDX-License-Identifier: Apache-2.0
