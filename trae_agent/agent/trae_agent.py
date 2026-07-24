@@ -199,44 +199,70 @@ class TraeAgent(BaseAgent):
 
             self._tool_caller = ToolExecutor(self._tools)
 
-        self._initial_messages: list[LLMMessage] = []
-        self._initial_messages.append(LLMMessage(role="system", content=self.get_system_prompt()))
-
-        # Optional: append loaded Skills as a second system message.
-        try:
-            from trae_agent.skills.loader import load_all_skills, skills_to_system_message
-
-            project_dir = extra_args.get("project_path") if extra_args else None
-            skills = load_all_skills(project_dir=project_dir)
-            skills_block = skills_to_system_message(skills)
-            if skills_block:
-                self._initial_messages.append(
-                    LLMMessage(role="system", content=skills_block)
-                )
-        except Exception:
-            # Skills are optional; never fail the agent on a skill error.
-            pass
-
-        user_message = ""
+        # --- Validation (always needed) ---
         if not extra_args:
             raise AgentError("Project path and issue information are required.")
         if "project_path" not in extra_args:
             raise AgentError("Project path is required")
-
         self.project_path = extra_args.get("project_path", "")
-        if self.docker_config:
-            user_message += r"[Project root path]:\workspace\n\n"
-        else:
-            user_message += f"[Project root path]:\n{self.project_path}\n\n"
-
-        if "issue" in extra_args:
-            user_message += f"[Problem statement]: We're currently solving the following issue within our repository. Here's the issue text:\n{extra_args['issue']}\n"
         optional_attrs_to_set = ["base_commit", "must_patch", "patch_path"]
         for attr in optional_attrs_to_set:
             if attr in extra_args:
                 setattr(self, attr, extra_args[attr])
 
-        self._initial_messages.append(LLMMessage(role="user", content=user_message))
+        # --- Skills load + render prompt (always, for tool filtering below) ---
+        skills: list = []
+        skills_block: str = ""
+        try:
+            from trae_agent.skills.loader import (
+                load_all_skills,
+                skills_to_system_message,
+            )
+
+            skills = load_all_skills(
+                project_dir=self.project_path if self.project_path else None
+            )
+            skills_block = skills_to_system_message(skills)
+        except Exception:
+            # Skills are optional; never fail the agent on a skill error.
+            pass
+
+        # --- Build initial messages (normal only) ---
+        if self._resume_start_step <= 1:
+            self._initial_messages: list[LLMMessage] = []
+            self._initial_messages.append(
+                LLMMessage(role="system", content=self.get_system_prompt())
+            )
+            if skills_block:
+                self._initial_messages.append(
+                    LLMMessage(role="system", content=skills_block)
+                )
+
+            user_message = ""
+            if self.docker_config:
+                user_message += r"[Project root path]:\workspace\n\n"
+            else:
+                user_message += f"[Project root path]:\n{self.project_path}\n\n"
+            if "issue" in extra_args:
+                user_message += (
+                    "[Problem statement]: We're currently solving the following "
+                    "issue within our repository. Here's the issue text:\n"
+                    f"{extra_args['issue']}\n"
+                )
+            self._initial_messages.append(LLMMessage(role="user", content=user_message))
+        # else: resume mode — _initial_messages already populated by
+        # resume_from_messages(). Do NOT clobber them.
+
+        # --- Skills tool filtering (P0) ---
+        if skills:
+            allowed = self._compute_skills_allowed_tools(skills)
+            if allowed is not None and self._tools:
+                filtered = [t for t in self._tools if t.name in allowed]
+                if len(filtered) != len(self._tools):
+                    self._tools = filtered
+                    from trae_agent.tools.base import ToolExecutor
+
+                    self._tool_caller = ToolExecutor(self._tools)
 
         # If trajectory recorder is set, start recording
         if self._trajectory_recorder:
@@ -246,6 +272,25 @@ class TraeAgent(BaseAgent):
                 model=self._model_config.model,
                 max_steps=self._max_steps,
             )
+
+    @staticmethod
+    def _compute_skills_allowed_tools(skills: list) -> set[str] | None:
+        """P0 修复:计算所有 skill 中 allowed_tools 交集,作为实际可用工具约束。
+
+        若没有任何 skill 设定了 allowed_tools(或所有都为 None),返回 None
+        表示不限制。若有 skill 设定了列表,则取**交集**。
+
+        空交集意味着**没有任何工具可用**——调用方应 allowlist 为空,
+        agent 将很快因无可用工具自然失败。
+        """
+        sets: list[set[str]] = []
+        for s in skills:
+            if hasattr(s, "allowed_tools") and s.allowed_tools is not None:
+                sets.append(set(s.allowed_tools))
+        if not sets:
+            return None
+        result = set.intersection(*sets)
+        return result
 
     @override
     async def execute_task(self) -> AgentExecution:

@@ -16,6 +16,7 @@ import json
 import time
 import uuid
 import asyncio
+import secrets
 import logging
 from typing import AsyncIterator
 from fastapi import FastAPI, Request, HTTPException
@@ -35,7 +36,7 @@ from mimo_client import (
 # ---------- 配置 ----------
 SANITIZE_MODE = os.environ.get("SANITIZE_MODE", "regex")  # off | regex | hybrid
 GATEWAY_PORT  = int(os.environ.get("GATEWAY_PORT", "8080"))
-GATEWAY_HOST  = os.environ.get("GATEWAY_HOST", "0.0.0.0")
+GATEWAY_HOST  = os.environ.get("GATEWAY_HOST", "127.0.0.1")
 GATEWAY_TOKEN = os.environ.get("GATEWAY_TOKEN")  # P1: optional bearer auth
 
 logger = logging.getLogger("mimo-gateway")
@@ -90,7 +91,10 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     if GATEWAY_TOKEN:
         auth = request.headers.get("authorization", "")
-        if not auth.startswith("Bearer ") or auth[7:] != GATEWAY_TOKEN:
+        if not auth.startswith("Bearer "):
+            raise HTTPException(401, "missing or invalid gateway token")
+        # 常量时间比较,防止 token 泄露(原代码用 != 存在时序侧信道)。
+        if not secrets.compare_digest(auth[7:], GATEWAY_TOKEN):
             raise HTTPException(401, "missing or invalid gateway token")
     return await call_next(request)
 

@@ -156,13 +156,20 @@ class _BashSession:
         if output.endswith("\n"):  # pyright: ignore[reportUnknownMemberType]
             output = output[:-1]  # pyright: ignore[reportUnknownVariableType]
 
-        error: str = self._process.stderr._buffer.decode()  # type: ignore[attr-defined] # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportAttributeAccessIssue]
+        error: str = ""
+        try:
+            error = self._process.stderr._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
+        except (AttributeError, ValueError):
+            pass
         if error.endswith("\n"):  # pyright: ignore[reportUnknownMemberType]
             error = error[:-1]  # pyright: ignore[reportUnknownVariableType]
 
         # clear the buffers so that the next output can be read correctly
-        self._process.stdout._buffer.clear()  # type: ignore[attr-defined] # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-        self._process.stderr._buffer.clear()  # type: ignore[attr-defined] # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+        try:
+            self._process.stdout._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
+            self._process.stderr._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
+        except AttributeError:
+            pass
 
         return ToolExecResult(output=output, error=error, error_code=error_code)  # pyright: ignore[reportUnknownArgumentType]
 
@@ -325,6 +332,16 @@ class ReadOnlyBashTool(BashTool):
         ("killall", r"\bkillall\s+"),
         # === Container / virtualenv writes ===
         ("docker rm", r"\bdocker\s+(rm|rmi|system\s+prune)\b"),
+        # === Inline code executors (bypass shell redirect checks) ===
+        # `python3 -c "open('x','w').write(...)"` 不经过 shell 重定向,
+        # 原黑名单无法拦截。这类命令在 plan 模式下完全禁止。
+        ("python3 -c", r"\bpython3?\s+-c\b"),
+        ("node -e/--eval", r"\bnode\s+(--eval|-e)\b"),
+        ("deno eval", r"\bdeno\s+eval\b"),
+        # === Git mutations ===
+        # `git branch -D` 删除分支(原 SAFE_PREFIXES 里 "git branch" 允许了它)
+        ("git branch -d/-D/-m", r"\bgit\s+branch\s+-(?:[dDmM]|-delete|-move)\b"),
+        ("git clean", r"\bgit\s+clean\b"),
     ]
 
     # Whitelisted safe operations (always allowed regardless of patterns above).
@@ -336,7 +353,7 @@ class ReadOnlyBashTool(BashTool):
         "find", "grep", "rg", "ag", "ack",
         "true", "false", "test", "[", "[[",
         "cd", "pwd", "env", "printenv", "which", "type", "command -v",
-        "git status", "git log", "git diff", "git show", "git blame", "git branch",
+        "git status", "git log", "git diff", "git show", "git blame",
         "git ls-files", "git remote -v",
         "ps", "top -l 1", "lsof", "netstat", "ss",
         "date", "cal", "uname", "whoami", "id", "hostname",
