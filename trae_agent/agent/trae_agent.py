@@ -98,9 +98,7 @@ class TraeAgent(BaseAgent):
         self.mcp_servers_config: dict[str, MCPServerConfig] | None = (
             trae_agent_config.mcp_servers_config if trae_agent_config.mcp_servers_config else None
         )
-        self.allow_mcp_servers: list[str] | None = (
-            trae_agent_config.allow_mcp_servers if trae_agent_config.allow_mcp_servers else []
-        )
+        self.allow_mcp_servers: list[str] | None = trae_agent_config.allow_mcp_servers
         self.mcp_tools: list[Tool] = []
         self.mcp_clients: list[MCPClient] = []  # Keep track of MCP clients for cleanup
         self.docker_config = docker_config
@@ -251,7 +249,9 @@ class TraeAgent(BaseAgent):
 
             user_message = ""
             if self.docker_config:
-                user_message += r"[Project root path]:\workspace\n\n"
+                user_message += (
+                    f"[Project root path]:\n{self.docker_manager.container_workspace}\n\n"
+                )
             else:
                 user_message += f"[Project root path]:\n{self.project_path}\n\n"
             if "issue" in extra_args:

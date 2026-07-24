@@ -148,7 +148,7 @@ class AgentConfig:
     Base class for agent configurations.
     """
 
-    allow_mcp_servers: list[str]
+    allow_mcp_servers: list[str] | None
     mcp_servers_config: dict[str, MCPServerConfig]
     max_steps: int
     model: ModelConfig
@@ -269,7 +269,7 @@ class Config:
         mcp_servers_config = {
             k: MCPServerConfig(**v) for k, v in yaml_config.get("mcp_servers", {}).items()
         }
-        allow_mcp_servers = yaml_config.get("allow_mcp_servers", [])
+        allow_mcp_servers = yaml_config.get("allow_mcp_servers", None)
 
         # Parse agents
         agents = yaml_config.get("agents", None)

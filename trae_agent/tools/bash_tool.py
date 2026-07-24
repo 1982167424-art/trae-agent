@@ -12,6 +12,7 @@
 import asyncio
 import os
 import re
+import uuid
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
@@ -26,7 +27,6 @@ class _BashSession:
 
     command: str = "/bin/bash"
     _timeout: float = 120.0  # seconds
-    _sentinel: str = ",,,,bash-command-exit-__ERROR_CODE__-banner,,,,"  # `__ERROR_CODE__` will be replaced by `$?` or `!errorlevel!` later
 
     def __init__(self) -> None:
         self._started = False
@@ -106,7 +106,10 @@ class _BashSession:
 
         error_code = 0
 
-        sentinel_before, pivot, sentinel_after = self._sentinel.partition("__ERROR_CODE__")
+        # Generate a unique sentinel per call to avoid collisions with command
+        # output that happens to contain the static marker string.
+        _sentinel = f",,,,bash-exit-{uuid.uuid4().hex}-__ERROR_CODE__-banner-{uuid.uuid4().hex},,,,"
+        sentinel_before, pivot, sentinel_after = _sentinel.partition("__ERROR_CODE__")
         assert pivot == "__ERROR_CODE__"
 
         errcode_retriever = "!errorlevel!" if os.name == "nt" else "$?"
@@ -122,7 +125,7 @@ class _BashSession:
 
         # send command to the process
         # Capture real exit code: run command in subshell, capture $? immediately.
-        sentinel_replaced = self._sentinel.replace('__ERROR_CODE__', errcode_retriever)
+        sentinel_replaced = _sentinel.replace('__ERROR_CODE__', errcode_retriever)
         if os.name == "nt":
             # Windows: run command, wait, capture errorlevel
             bg_command = command
