@@ -20,7 +20,13 @@ from openai.types.responses.response_input_param import FunctionCallOutput
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import (
+    LLMMessage,
+    LLMResponse,
+    LLMUsage,
+    ImageContent,
+    to_provider_content,
+)
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -191,9 +197,27 @@ class OpenAIClient(BaseLLMClient):
                 if msg.role == "system":
                     openai_messages.append({"role": "system", "content": msg.content})
                 elif msg.role == "user":
-                    openai_messages.append({"role": "user", "content": msg.content})
+                    openai_messages.append(
+                        {
+                            "role": "user",
+                            "content": to_provider_content(
+                                msg.content,
+                                self.model_config.supports_multimodal,
+                                _convert_oa_responses,
+                            ),
+                        }
+                    )
                 elif msg.role == "assistant":
-                    openai_messages.append({"role": "assistant", "content": msg.content})
+                    openai_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": to_provider_content(
+                                msg.content,
+                                self.model_config.supports_multimodal,
+                                _convert_oa_responses,
+                            ),
+                        }
+                    )
                 else:
                     raise ValueError(f"Invalid message role: {msg.role}")
         return openai_messages
@@ -221,6 +245,23 @@ class OpenAIClient(BaseLLMClient):
             call_id=tool_call_result.call_id,
             output=result_content,
         )
+
+    @staticmethod
+    def _convert_oa_responses(parts: list) -> list[dict]:
+        """Build an OpenAI Responses-API multimodal ``content`` array.
+
+        Text parts become ``{"type": "input_text", ...}``; image
+        parts become ``{"type": "input_image", "image_url": ...}``
+        (``data:`` URI when only raw base64 is available).
+        """
+        out: list[dict] = []
+        for p in parts:
+            if isinstance(p, ImageContent):
+                url = p.url or f"data:{p.media_type};base64,{p.data}"
+                out.append({"type": "input_image", "image_url": url})
+            else:
+                out.append({"type": "input_text", "text": p.text})
+        return out
 
     @staticmethod
     def _sanitize_orphaned_function_calls(

@@ -11,7 +11,13 @@ from anthropic.types.tool_union_param import TextEditor20250429
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import (
+    LLMMessage,
+    LLMResponse,
+    LLMUsage,
+    ImageContent,
+    to_provider_content,
+)
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -215,7 +221,14 @@ class AnthropicClient(BaseLLMClient):
                     raise ValueError("Message content is required")
 
                 anthropic_messages.append(
-                    anthropic.types.MessageParam(role=role, content=msg.content)
+                    anthropic.types.MessageParam(
+                        role=role,
+                        content=to_provider_content(
+                            msg.content,
+                            self.model_config.supports_multimodal,
+                            _convert_anthropic_content,
+                        ),
+                    )
                 )
         return anthropic_messages, system_message
 
@@ -252,3 +265,27 @@ class AnthropicClient(BaseLLMClient):
             content=result,
             is_error=not tool_call_result.success,
         )
+
+
+def _convert_anthropic_content(parts: list) -> list[dict]:
+    """Build Anthropic multimodal ``content`` blocks.
+
+    Text parts become ``{"type": "text", ...}``; image
+    parts become ``{"type": "image", "source": {...}}`` using
+    either base64 or a remote URL.
+    """
+    out: list[dict] = []
+    for p in parts:
+        if isinstance(p, ImageContent):
+            if p.data:
+                src: dict = {
+                    "type": "base64",
+                    "media_type": p.media_type,
+                    "data": p.data,
+                }
+            else:
+                src = {"type": "url", "url": p.url}
+            out.append({"type": "image", "source": src})
+        else:
+            out.append({"type": "text", "text": p.text})
+    return out

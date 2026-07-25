@@ -61,8 +61,9 @@ class Agent:
         task: str,
         extra_args: dict[str, str] | None = None,
         tool_names: list[str] | None = None,
+        images: list | None = None,
     ):
-        self.agent.new_task(task, extra_args, tool_names)
+        self.agent.new_task(task, extra_args, tool_names, images=images)
 
         if self.agent.allow_mcp_servers:
             if self.agent.cli_console:
