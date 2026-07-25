@@ -41,6 +41,7 @@ class ModelConfig:
     max_retries: int
     max_tokens: int | None = None  # Legacy max_tokens parameter, optional
     supports_tool_calling: bool = True
+    supports_multimodal: bool = False
     candidate_count: int | None = None  # Gemini specific field
     stop_sequences: list[str] | None = None
     max_completion_tokens: int | None = None  # Azure OpenAI specific field

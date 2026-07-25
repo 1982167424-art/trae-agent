@@ -21,6 +21,7 @@ from rich.text import Text
 from trae_agent.agent import Agent
 from trae_agent.utils.cli import CLIConsole, ConsoleFactory, ConsoleMode, ConsoleType
 from trae_agent.utils.config import Config, TraeAgentConfig
+from trae_agent.utils.multimodal import load_images
 
 # Load environment variables
 _ = load_dotenv()
@@ -198,6 +199,15 @@ def cli():
     help="Type of agent to use (trae_agent)",
     default="trae_agent",
 )
+@click.option(
+    "--image",
+    "-i",
+    "images",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+    help="Attach an image to the task (multimodal). Repeatable. "
+    "Only sent when the selected model supports multimodal input.",
+)
 def run(
     task: str | None,
     file_path: str | None,
@@ -212,6 +222,7 @@ def run(
     config_file: str = "trae_config.yaml",
     trajectory_file: str | None = None,
     console_type: str | None = "simple",
+    images: tuple[str, ...] = (),
     agent_type: str | None = "trae_agent",
     # --- Add Docker Mode ---
     docker_image: str | None = None,
@@ -393,12 +404,27 @@ def run(
             "patch_path": patch_path,
         }
 
+        # --- Multimodal: load attached images ---
+        images_list = None
+        if images:
+            try:
+                images_list = load_images(list(images))
+            except (FileNotFoundError, ValueError) as e:
+                console.print(f"[red]Error loading image: {e}[/red]")
+                sys.exit(1)
+            if config.trae_agent and not config.trae_agent.model.supports_multimodal:
+                console.print(
+                    "[yellow]Warning: the selected model does not support "
+                    "multimodal input; attached images will be ignored.[/yellow]"
+                )
+                images_list = None
+
         # Set up agent context for rich console if applicable
         if selected_console_type == ConsoleType.RICH and hasattr(cli_console, "set_agent_context"):
             cli_console.set_agent_context(agent, config.trae_agent, config_file, trajectory_file)
 
         # Agent will handle starting the appropriate console
-        _ = asyncio.run(agent.run(task, task_args))
+        _ = asyncio.run(agent.run(task, task_args, images=images_list))
 
         console.print(f"\n[green]Trajectory saved to: {agent.trajectory_file}[/green]")
 

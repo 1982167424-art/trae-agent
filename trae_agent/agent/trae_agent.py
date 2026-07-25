@@ -11,7 +11,7 @@ from typing_extensions import override
 
 from trae_agent.agent.agent_basics import AgentError, AgentExecution
 from trae_agent.agent.base_agent import BaseAgent
-from trae_agent.prompt.agent_prompt import TRAE_AGENT_SYSTEM_PROMPT
+from trae_agent.prompt.agent_prompt import TRAE_AGENT_SYSTEM_PROMPT, MULTIMODAL_PROMPT
 from trae_agent.tools import tools_registry
 from trae_agent.tools.base import Tool, ToolResult
 from trae_agent.utils.config import MCPServerConfig, TraeAgentConfig
@@ -163,9 +163,11 @@ class TraeAgent(BaseAgent):
         task: str,
         extra_args: dict[str, str] | None = None,
         tool_names: list[str] | None = None,
+        images: list | None = None,
     ):
         """Create a new task."""
         self._task: str = task
+        self._has_images: bool = bool(images)
 
         # Decide which tools to instantiate for THIS task.
         #
@@ -260,7 +262,17 @@ class TraeAgent(BaseAgent):
                     "issue within our repository. Here's the issue text:\n"
                     f"{extra_args['issue']}\n"
                 )
-            self._initial_messages.append(LLMMessage(role="user", content=user_message))
+            # --- Multimodal: attach images to the first user turn ---
+            user_content: str | list = user_message
+            if images:
+                if self._model_config.supports_multimodal:
+                    user_content = [{"type": "text", "text": user_message}, *images]
+                else:
+                    print(
+                        "[trae-agent] Warning: the active model does not "
+                        "support multimodal input; attached images are ignored."
+                    )
+            self._initial_messages.append(LLMMessage(role="user", content=user_content))
         # else: resume mode — _initial_messages already populated by
         # resume_from_messages(). Do NOT clobber them.
 
@@ -322,9 +334,15 @@ class TraeAgent(BaseAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for TraeAgent."""
+        base = TRAE_AGENT_SYSTEM_PROMPT
         if self.plan_mode:
-            return TRAE_AGENT_SYSTEM_PROMPT + TRAE_AGENT_PLAN_PROMPT
-        return TRAE_AGENT_SYSTEM_PROMPT
+            base += TRAE_AGENT_PLAN_PROMPT
+        # Issue: multimodal tasks need different instructions.
+        # When images are attached, the agent should describe/analyze them
+        # directly in text, not try to use software engineering tools.
+        if getattr(self, "_has_images", False):
+            base += MULTIMODAL_PROMPT
+        return base
 
     @override
     def reflect_on_result(self, tool_results: list[ToolResult]) -> str | None:
