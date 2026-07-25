@@ -208,6 +208,18 @@ def cli():
     help="Attach an image to the task (multimodal). Repeatable. "
     "Only sent when the selected model supports multimodal input.",
 )
+@click.option(
+    "--output-dir",
+    "-od",
+    default=None,
+    type=click.Path(resolve_path=True),
+    help="Custom output directory for generated files. If set, files go directly here (no project subfolders).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help="Project name for organizing outputs. Files saved to ~/Desktop/trae-agent-outputs/<project>/",
+)
 def run(
     task: str | None,
     file_path: str | None,
@@ -224,6 +236,8 @@ def run(
     console_type: str | None = "simple",
     images: tuple[str, ...] = (),
     agent_type: str | None = "trae_agent",
+    output_dir: str | None = None,
+    project: str | None = None,
     # --- Add Docker Mode ---
     docker_image: str | None = None,
     docker_container_id: str | None = None,
@@ -310,6 +324,16 @@ def run(
             "[red]Error: Must provide either a task string or use the --file argument.[/red]"
         )
         sys.exit(1)
+
+    # --- Output directory setup ---
+    from trae_agent.utils.output_manager import set_output_dir_override, set_current_project, new_conversation
+    if output_dir:
+        set_output_dir_override(output_dir)
+        console.print(f"[blue]Output directory: {output_dir}[/blue]")
+    elif project:
+        set_current_project(project)
+        conv_id = new_conversation(project)
+        console.print(f"[blue]Project: {project} | Conversation: {conv_id}[/blue]")
 
     config = Config.create(
         config_file=config_file,
@@ -1192,6 +1216,84 @@ def trajectory_export(trajectory_file: str, fmt: str, output: str | None):
     console.print(f"[green]✓ Exported trajectory[/green]")
     console.print(f"  source: {src}")
     console.print(f"  output: {written}  ({fmt.upper()})")
+
+
+# ========== Project Management ==========
+
+@cli.group()
+def project():
+    """Manage projects (organize outputs by project)."""
+    pass
+
+
+@project.command(name="new")
+@click.argument("name")
+@click.option("--output-dir", "-o", default=None, help="Custom output directory (no subfolders created).")
+def project_new(name: str, output_dir: str | None):
+    """Create a new project."""
+    from trae_agent.utils.output_manager import new_project
+    path = new_project(name, output_dir)
+    console.print(f"[green]✓ Project '{name}' created[/green]")
+    console.print(f"  Path: {path}")
+
+
+@project.command(name="list")
+def project_list():
+    """List all projects."""
+    from trae_agent.utils.output_manager import list_projects
+    projects = list_projects()
+    if not projects:
+        console.print("[yellow]No projects yet.[/yellow]")
+        console.print("Create one with: trae-cli project new <name>")
+        return
+
+    table = Table(title=f"Projects ({len(projects)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Path", style="green")
+    table.add_column("Conversations", style="dim")
+    table.add_column("Created", style="dim")
+
+    for name, info in projects.items():
+        conv_count = len(info.get("conversations", []))
+        table.add_row(name, info.get("dir", "?"), str(conv_count), info.get("created", "?")[:10])
+
+    console.print(table)
+
+
+@project.command(name="use")
+@click.argument("name")
+def project_use(name: str):
+    """Switch to an existing project."""
+    from trae_agent.utils.output_manager import set_current_project, get_project_dir
+    project_dir = get_project_dir(name)
+    if project_dir is None:
+        console.print(f"[red]Project '{name}' not found. Create it with: trae-cli project new {name}[/red]")
+        sys.exit(1)
+    set_current_project(name)
+    console.print(f"[green]✓ Switched to project '{name}'[/green]")
+    console.print(f"  Path: {project_dir}")
+
+
+@project.command(name="open")
+@click.argument("name", required=False)
+def project_open(name: str | None):
+    """Open project folder in Finder."""
+    from trae_agent.utils.output_manager import get_project_dir, _current_project
+    target = name or _current_project
+    if not target:
+        console.print("[red]No project specified. Use: trae-cli project open <name>[/red]")
+        sys.exit(1)
+    project_dir = get_project_dir(target)
+    if project_dir is None:
+        console.print(f"[red]Project '{target}' not found.[/red]")
+        sys.exit(1)
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(project_dir)])
+    elif sys.platform.startswith("linux"):
+        subprocess.Popen(["xdg-open", str(project_dir)])
+    elif os.name == "nt":
+        subprocess.Popen(["explorer", str(project_dir)])
+    console.print(f"Opened: {project_dir}")
 
 
 def main():
