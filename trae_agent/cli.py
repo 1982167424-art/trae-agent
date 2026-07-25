@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import traceback
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import click
@@ -1172,6 +1174,146 @@ def skills_open_dir():
         _ = subprocess.Popen(["xdg-open", str(p)])
     elif os.name == "nt":
         _ = subprocess.Popen(["explorer", str(p)])
+
+
+@skills.command(name="info")
+@click.argument("name")
+@click.option("--project-dir", default=".", help="Project root for project-local skills.")
+def skills_info(name: str, project_dir: str):
+    """Alias for ``show`` — display full content of a skill."""
+    from .skills.loader import load_all_skills
+
+    loaded = load_all_skills(project_dir=project_dir)
+    match = next((s for s in loaded if s.name == name), None)
+    if not match:
+        console.print(f"[red]Skill '{name}' not found.[/red]")
+        sys.exit(1)
+
+    console.print(
+        Panel(
+            f"[bold cyan]Description:[/bold cyan] {match.description}\n"
+            f"[bold cyan]Source:[/bold cyan] {match.relative_source}\n"
+            + (
+                f"[bold cyan]Allowed tools:[/bold cyan] {', '.join(match.allowed_tools)}\n"
+                if match.allowed_tools
+                else "[bold cyan]Allowed tools:[/bold cyan] (all)\n"
+            ),
+            title=f"Skill: {match.name}",
+            border_style="cyan",
+        )
+    )
+    console.print(match.content)
+
+
+@skills.command(name="validate")
+@click.argument("file_path", type=click.Path(exists=True, dir_okay=False))
+def skills_validate(file_path: str):
+    """Strictly validate a single skill Markdown file.
+
+    Reports YAML frontmatter, name, description, body, and tools-list
+    validation errors. Exits with code 0 on success, 1 on failure.
+    """
+    from .skills.loader import SkillValidationError, validate_skill
+
+    p = Path(file_path)
+    try:
+        skill = validate_skill(p)
+    except SkillValidationError as e:
+        console.print(f"[red]Validation FAILED[/red] — {e}")
+        sys.exit(1)
+    else:
+        console.print(
+            Panel(
+                f"[green]✓[/green] Skill [cyan]{skill.name}[/cyan] is valid\n"
+                f"[bold]Description:[/bold] {skill.description}\n"
+                f"[bold]Allowed tools:[/bold] "
+                + (", ".join(skill.allowed_tools) if skill.allowed_tools else "(all)")
+                + f"\n[bold]Body:[/bold] {len(skill.content)} chars",
+                title="Validation OK",
+                border_style="green",
+            )
+        )
+
+
+@skills.command(name="install")
+@click.argument("source")
+@click.option(
+    "--name",
+    "-n",
+    default=None,
+    help="Optional name override (default: derived from source filename).",
+)
+def skills_install(source: str, name: str | None):
+    """Install a skill from a URL or local file path.
+
+    Downloads (or copies) the Markdown file into ~/.trae-agent/skills/.
+    SOURCE can be:
+    \b
+    - an https:// URL pointing to a raw skill .md file
+    - a local file path to a skill .md file
+    """
+    from .skills.loader import SkillValidationError, validate_skill
+
+    target_dir = Path.home() / ".trae-agent" / "skills"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_path: Path | None = None
+    temp_file: Path | None = None
+
+    try:
+        # --- download / copy ---
+        if source.startswith(("http://", "https://")):
+            console.print(f"Downloading [cyan]{source}[/cyan] …")
+            req = urllib.request.Request(
+                source, headers={"User-Agent": "trae-agent-skills/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+            final_name = name or source.rsplit("/", 1)[-1].removesuffix(".md") or "downloaded"
+            dest_path = target_dir / f"{final_name}.md"
+            if dest_path.exists():
+                console.print(f"[yellow]Overwriting existing skill: {dest_path}[/yellow]")
+            dest_path.write_bytes(raw)
+        else:
+            src = Path(source)
+            if not src.exists():
+                console.print(f"[red]File not found: {src}[/red]")
+                sys.exit(1)
+            final_name = name or src.stem
+            dest_path = target_dir / f"{final_name}.md"
+            if dest_path.exists():
+                console.print(f"[yellow]Overwriting existing skill: {dest_path}[/yellow]")
+            shutil.copy2(str(src), str(dest_path))
+
+        # --- validate ---
+        try:
+            skill = validate_skill(dest_path)
+        except SkillValidationError as e:
+            # Install succeeded but skill is invalid — remove it
+            dest_path.unlink(missing_ok=True)
+            console.print(f"[red]Skill is invalid, install cancelled.[/red]")
+            console.print(f"[red]Reason: {e}[/red]")
+            sys.exit(1)
+
+        console.print(
+            Panel(
+                f"[green]✓[/green] Skill [cyan]{skill.name}[/cyan] installed\n"
+                f"[bold]Path:[/bold] {dest_path}\n"
+                f"[bold]Description:[/bold] {skill.description}\n"
+                f"[bold]Allowed tools:[/bold] "
+                + (", ".join(skill.allowed_tools) if skill.allowed_tools else "(all)")
+                + f"\n[bold]Body:[/bold] {len(skill.content)} chars",
+                title="Install Successful",
+                border_style="green",
+            )
+        )
+
+    except urllib.error.URLError as e:
+        console.print(f"[red]Download failed:[/red] {e}")
+        sys.exit(1)
+    except OSError as e:
+        console.print(f"[red]File error:[/red] {e}")
+        sys.exit(1)
 
 
 @cli.group()
