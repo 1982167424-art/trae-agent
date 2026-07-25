@@ -34,10 +34,15 @@ _write_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="traj-writer"
 class TrajectoryRecorder:
     """Records trajectory data for agent execution and LLM interactions."""
 
-    def __init__(self, trajectory_path: str | None = None):
+    def __init__(self, trajectory_path: str | None = None, project_name: str | None = None):
         if trajectory_path is None:
+            # Save trajectory to Desktop/trae-agent-outputs/<project>/trajectories/
+            from trae_agent.utils.output_manager import get_output_dir
+            output_dir = get_output_dir(project_name)
+            traj_dir = output_dir / "trajectories"
+            traj_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            trajectory_path = f"trajectories/trajectory_{timestamp}.json"
+            trajectory_path = str(traj_dir / f"trajectory_{timestamp}.json")
 
         self.trajectory_path: Path = Path(trajectory_path).resolve()
         try:

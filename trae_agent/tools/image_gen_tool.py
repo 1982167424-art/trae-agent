@@ -12,6 +12,7 @@ from typing_extensions import override
 import openai
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
+from trae_agent.utils.output_manager import generate_output_path
 
 
 class ToolError(Exception):
@@ -140,12 +141,12 @@ Examples: "画一个登录页面的线框图", "生成一张日落风景图", "c
             image_url = getattr(image_data, "url", None)
             image_b64 = getattr(image_data, "b64_json", None)
 
-            if not output_path:
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = f"generated_{ts}.png"
-
-            out = Path(output_path)
-            out.parent.mkdir(parents=True, exist_ok=True)
+            # Use output manager to organize files by project on Desktop
+            if output_path:
+                out = Path(output_path)
+                out.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                out = generate_output_path(extension=".png")
 
             if image_b64:
                 out.write_bytes(base64.b64decode(image_b64))
