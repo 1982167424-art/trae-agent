@@ -15,9 +15,14 @@ from trae_agent.tools.base import Tool, ToolCall, ToolExecutor, ToolResult
 from trae_agent.tools.ckg.ckg_database import clear_older_ckg
 from trae_agent.tools.docker_tool_executor import DockerToolExecutor
 from trae_agent.utils.cli import CLIConsole
-from trae_agent.utils.config import AgentConfig, ModelConfig
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse
+from trae_agent.utils.config import AgentConfig, ConfigError, ModelConfig
+from trae_agent.utils.llm_clients.llm_basics import (
+    ImageContent,
+    LLMMessage,
+    LLMResponse,
+)
 from trae_agent.utils.llm_clients.llm_client import LLMClient
+from trae_agent.utils.model_router import ModelRouter
 from trae_agent.utils.trajectory_recorder import TrajectoryRecorder
 
 
@@ -34,13 +39,30 @@ class BaseAgent(ABC):
             agent_config: Configuration object containing model parameters and other settings.
             docker_config: Configuration for running in a Docker environment.
         """
-        self._llm_client = LLMClient(agent_config.model)
-        self._model_config = agent_config.model
+        # --- Auto model routing (opt-in via `model_routing` config) ---
+        # When routing is enabled we defer LLM client creation until
+        # new_task() picks the actual model for this task, so the agent
+        # is not pinned to the static `model` from config.
+        self._model_router: ModelRouter | None = None
+        self._all_models: dict[str, ModelConfig] | None = None
+        self._current_model_name: str | None = None
+        _routing = getattr(agent_config, "model_routing", None)
+        if _routing is not None and getattr(agent_config, "all_models", None):
+            self._all_models = agent_config.all_models
+            self._model_router = ModelRouter(_routing, self._all_models)
+            self._model_config = None
+            self._llm_client = None
+            tools_provider: str | None = None  # resolved later
+        else:
+            self._model_config = agent_config.model
+            self._llm_client = LLMClient(agent_config.model)
+            tools_provider = self._model_config.model_provider.provider
+
         self._max_steps = agent_config.max_steps
         self._initial_messages: list[LLMMessage] = []
         self._task: str = ""
         self._tools: list[Tool] = [
-            tools_registry[tool_name](model_provider=self._model_config.model_provider.provider)
+            tools_registry[tool_name](model_provider=tools_provider)
             for tool_name in agent_config.tools
         ]
         self.docker_keep = docker_keep
@@ -137,6 +159,46 @@ class BaseAgent(ABC):
     def model_config(self) -> ModelConfig:
         """Get the model config for the agent."""
         return self._model_config
+
+    def _resolve_model(self, model_name: str) -> None:
+        """Build the LLM client for ``model_name`` and switch to it.
+
+        Used by auto model routing: at task start, and whenever a hard
+        constraint (e.g. an image appears but the current model can't
+        handle multimodal) forces a switch mid-run.
+        """
+        if self._all_models is None or model_name not in self._all_models:
+            raise ConfigError(f"Auto-routing referenced unknown model: {model_name}")
+        mc = self._all_models[model_name]
+        self._model_config = mc
+        self._llm_client = LLMClient(mc)
+        self._current_model_name = model_name
+        # Keep the trajectory recorder bound to the (new) client.
+        if self._trajectory_recorder:
+            self._llm_client.set_trajectory_recorder(self._trajectory_recorder)
+
+    def _messages_have_image(self, messages: list["LLMMessage"]) -> bool:
+        """True if any message in the history carries an image part."""
+        for m in messages:
+            c = m.content
+            if isinstance(c, list) and any(isinstance(p, ImageContent) for p in c):
+                return True
+        return False
+
+    def _maybe_reroute(self, messages: list["LLMMessage"]) -> None:
+        """Sticky per-step reroute: only switch on hard constraints.
+
+        Soft signals (task phrasing) are ignored here to avoid thrashing
+        the model every step. Only a violated hard constraint — an image
+        present but the current model is not multimodal-capable — triggers
+        a switch.
+        """
+        if self._model_router is None or self._model_config is None:
+            return
+        has_image = self._messages_have_image(messages)
+        switch_to = self._model_router.select_for_constraints(has_image, self._model_config)
+        if switch_to is not None and switch_to != self._current_model_name:
+            self._resolve_model(switch_to)
 
     @property
     def max_steps(self) -> int:
@@ -286,6 +348,9 @@ class BaseAgent(ABC):
         # Display thinking state
         step.state = AgentStepState.THINKING
         self._update_cli_console(step, execution)
+        # Auto model routing: re-check hard constraints before each step
+        # (e.g. an image appeared but the current model can't see it).
+        self._maybe_reroute(messages)
         # Get LLM response
         llm_response = self._llm_client.chat(messages, self._model_config, self._tools)
         step.llm_response = llm_response

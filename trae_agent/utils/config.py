@@ -168,6 +168,13 @@ class TraeAgentConfig(AgentConfig):
     """
 
     enable_lakeview: bool = True
+    # Populated by Config.create; the full ``models`` dict so the router
+    # can resolve tier names to ModelConfig at runtime.
+    all_models: "dict[str, ModelConfig] | None" = None
+    # Opt-in auto model routing. When set, the agent picks a model per
+    # task (and re-checks hard constraints per step) instead of always
+    # using ``model``.
+    model_routing: "ModelRoutingConfig | None" = None
     tools: list[str] = field(
         default_factory=lambda: [
             "bash",
@@ -194,6 +201,21 @@ class LakeviewConfig:
     """
 
     model: ModelConfig
+
+
+@dataclass
+class ModelRoutingConfig:
+    """Tier → model-name mapping used when auto model routing is enabled.
+
+    Each tier names a ``models`` entry (string key). The router picks a
+    tier per task (and re-checks hard constraints per step) and the agent
+    resolves the name to a :class:`ModelConfig` at runtime.
+    """
+
+    vision: str  # multimodal / image-capable model
+    strong: str  # complex reasoning / high-quality tasks
+    fast: str  # simple, mechanical coding tasks (cheap & quick)
+    tiny: str | None = None  # trivial tasks (optional)
 
 
 @dataclass
@@ -296,6 +318,24 @@ class Config:
                             allow_mcp_servers=allow_mcp_servers,
                         )
                         trae_agent_config.model = agent_model
+                        # Auto model routing: hand the full models dict and
+                        # the parsed `model_routing` block to the agent so it
+                        # can resolve tiers to ModelConfig at runtime.
+                        trae_agent_config.all_models = config_models
+                        routing_raw = yaml_config.get("model_routing")
+                        if routing_raw:
+                            required = ("vision", "strong", "fast")
+                            missing = [k for k in required if k not in routing_raw]
+                            if missing:
+                                raise ConfigError(
+                                    f"model_routing missing required tiers: {missing}"
+                                )
+                            trae_agent_config.model_routing = ModelRoutingConfig(
+                                vision=routing_raw["vision"],
+                                strong=routing_raw["strong"],
+                                fast=routing_raw["fast"],
+                                tiny=routing_raw.get("tiny"),
+                            )
                         if trae_agent_config.enable_lakeview and config.lakeview is None:
                             raise ConfigError("Lakeview is enabled but no lakeview config provided")
                         config.trae_agent = trae_agent_config

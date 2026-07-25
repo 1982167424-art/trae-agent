@@ -172,6 +172,14 @@ class TraeAgent(BaseAgent):
         """Create a new task."""
         self._task: str = task
 
+        # Auto model routing: pick the initial model for THIS task before
+        # anything touches self._model_config (plan mode / tool setup below).
+        if self._model_router is not None and self._model_config is None:
+            model_name = self._model_router.select_initial(
+                task, has_image=bool(images)
+            )
+            self._resolve_model(model_name)
+
         # Decide which tools to instantiate for THIS task.
         #
         # P1-1 修复:之前条件是 `tool_names is None and len(self._tools) == 0`,
