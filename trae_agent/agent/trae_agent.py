@@ -15,7 +15,11 @@ from trae_agent.prompt.agent_prompt import TRAE_AGENT_SYSTEM_PROMPT
 from trae_agent.tools import tools_registry
 from trae_agent.tools.base import Tool, ToolResult
 from trae_agent.utils.config import MCPServerConfig, TraeAgentConfig
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse
+from trae_agent.utils.llm_clients.llm_basics import (
+    LLMMessage,
+    LLMResponse,
+    TextContent,
+)
 from trae_agent.utils.mcp_client import MCPClient
 
 TraeAgentToolNames = [
@@ -163,6 +167,7 @@ class TraeAgent(BaseAgent):
         task: str,
         extra_args: dict[str, str] | None = None,
         tool_names: list[str] | None = None,
+        images: list | None = None,
     ):
         """Create a new task."""
         self._task: str = task
@@ -260,7 +265,19 @@ class TraeAgent(BaseAgent):
                     "issue within our repository. Here's the issue text:\n"
                     f"{extra_args['issue']}\n"
                 )
-            self._initial_messages.append(LLMMessage(role="user", content=user_message))
+            # --- Multimodal: attach images to the first user turn ---
+            user_content: str | list = user_message
+            if images:
+                if self._model_config.supports_multimodal:
+                    # 组成多模态消息:文本 + 图片(TextContent/ImageContent 列表)。
+                    user_content = [TextContent(text=user_message), *images]
+                else:
+                    # 模型不支持多模态 → 优雅降级,仅保留文本。
+                    print(
+                        "[trae-agent] Warning: the active model does not "
+                        "support multimodal input; attached images are ignored."
+                    )
+            self._initial_messages.append(LLMMessage(role="user", content=user_content))
         # else: resume mode — _initial_messages already populated by
         # resume_from_messages(). Do NOT clobber them.
 

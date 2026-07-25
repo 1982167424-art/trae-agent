@@ -27,7 +27,13 @@ from openai.types.shared_params.function_definition import FunctionDefinition
 from trae_agent.tools.base import Tool, ToolCall
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import (
+    LLMMessage,
+    LLMResponse,
+    LLMUsage,
+    ImageContent,
+    to_provider_content,
+)
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -237,7 +243,9 @@ class OpenAICompatibleClient(BaseLLMClient):
                 case msg if msg.tool_result is not None:
                     _msg_tool_result_handler(openai_messages, msg)
                 case _:
-                    _msg_role_handler(openai_messages, msg)
+                    _msg_role_handler(
+                        openai_messages, msg, self.model_config.supports_multimodal
+                    )
 
         return openai_messages
 
@@ -276,7 +284,28 @@ def _msg_tool_result_handler(messages: list[ChatCompletionMessageParam], msg: LL
         )
 
 
-def _msg_role_handler(messages: list[ChatCompletionMessageParam], msg: LLMMessage) -> None:
+def _convert_oa_content(parts: list) -> list[dict]:
+    """Build an OpenAI chat-completion multimodal ``content`` array.
+
+    Text parts become ``{"type": "text", ...}``; image parts
+    become ``{"type": "image_url", "image_url": {"url": ...}}``
+    (``data:`` URI when only raw base64 is available).
+    """
+    out: list[dict] = []
+    for p in parts:
+        if isinstance(p, ImageContent):
+            url = p.url or f"data:{p.media_type};base64,{p.data}"
+            out.append({"type": "image_url", "image_url": {"url": url, "detail": p.detail}})
+        else:
+            out.append({"type": "text", "text": p.text})
+    return out
+
+
+def _msg_role_handler(
+    messages: list[ChatCompletionMessageParam],
+    msg: LLMMessage,
+    supports_multimodal: bool,
+) -> None:
     if msg.role:
         match msg.role:
             case "system":
@@ -286,14 +315,20 @@ def _msg_role_handler(messages: list[ChatCompletionMessageParam], msg: LLMMessag
                     ChatCompletionSystemMessageParam(content=msg.content, role="system")
                 )
             case "user":
-                if not msg.content:
+                content = to_provider_content(
+                    msg.content, supports_multimodal, _convert_oa_content
+                )
+                if not content:
                     raise ValueError("User message content is required")
-                messages.append(ChatCompletionUserMessageParam(content=msg.content, role="user"))
+                messages.append(ChatCompletionUserMessageParam(content=content, role="user"))
             case "assistant":
-                if not msg.content:
+                content = to_provider_content(
+                    msg.content, supports_multimodal, _convert_oa_content
+                )
+                if not content:
                     raise ValueError("Assistant message content is required")
                 messages.append(
-                    ChatCompletionAssistantMessageParam(content=msg.content, role="assistant")
+                    ChatCompletionAssistantMessageParam(content=content, role="assistant")
                 )
             case _:
                 raise ValueError(f"Invalid message role: {msg.role}")

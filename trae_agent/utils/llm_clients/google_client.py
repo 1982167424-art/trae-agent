@@ -3,6 +3,7 @@
 
 """Google Gemini API client wrapper with tool integration."""
 
+import base64
 import json
 import traceback
 import uuid
@@ -14,7 +15,13 @@ from google.genai import types
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import (
+    LLMMessage,
+    LLMResponse,
+    LLMUsage,
+    ImageContent,
+    normalize_content,
+)
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -166,7 +173,9 @@ class GoogleClient(BaseLLMClient):
 
         return llm_response
 
-    def parse_messages(self, messages: list[LLMMessage]) -> tuple[list[types.Content], str | None]:
+    def parse_messages(
+        self, messages: list[LLMMessage]
+    ) -> tuple[list[types.Content], str | None]:
         """Parse the messages to Gemini format, separating system instructions."""
         gemini_messages: list[types.Content] = []
         system_instruction: str | None = None
@@ -188,9 +197,12 @@ class GoogleClient(BaseLLMClient):
                 )
             else:
                 role = "user" if msg.role == "user" else "model"
-                gemini_messages.append(
-                    types.Content(role=role, parts=[types.Part(text=msg.content or "")])
+                parts = _convert_gemini_content(
+                    normalize_content(msg.content, self.model_config.supports_multimodal)
                 )
+                if not parts:
+                    parts = [types.Part(text=msg.content or "")]
+                gemini_messages.append(types.Content(role=role, parts=parts))
 
         return gemini_messages, system_instruction
 
@@ -229,3 +241,43 @@ class GoogleClient(BaseLLMClient):
                 "matching the function that was called."
             )
         return types.Part.from_function_response(name=tool_result.name, response=result_content)
+
+
+def _convert_gemini_content(parts: list) -> list:
+    """Build Gemini ``Part`` objects from normalized content parts.
+
+    Text parts become ``types.Part(text=...)``; image parts
+    become ``types.Part(inline_data=types.Blob(...))`` from base64
+    ``data`` (or a ``data:`` URI). Remote image URLs are not
+    supported by this client and raise a clear error.
+    """
+    out: list = []
+    for p in parts:
+        if isinstance(p, ImageContent):
+            if p.data:
+                out.append(
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type=p.media_type, data=base64.b64decode(p.data)
+                        )
+                    )
+                )
+            elif p.url and p.url.startswith("data:"):
+                _, b64 = p.url.split(",", 1)
+                out.append(
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type=p.media_type, data=base64.b64decode(b64)
+                        )
+                    )
+                )
+            elif p.url:
+                raise ValueError(
+                    "Gemini requires base64 image data (or a data: URI); "
+                    "remote image URLs are not supported by this client."
+                )
+            else:
+                raise ValueError("ImageContent has neither data nor url")
+        else:
+            out.append(types.Part(text=p.text))
+    return out

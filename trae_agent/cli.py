@@ -21,6 +21,7 @@ from rich.text import Text
 from trae_agent.agent import Agent
 from trae_agent.utils.cli import CLIConsole, ConsoleFactory, ConsoleMode, ConsoleType
 from trae_agent.utils.config import Config, TraeAgentConfig
+from trae_agent.utils.multimodal import load_images
 
 # Load environment variables
 _ = load_dotenv()
@@ -198,6 +199,15 @@ def cli():
     help="Type of agent to use (trae_agent)",
     default="trae_agent",
 )
+@click.option(
+    "--image",
+    "-i",
+    "images",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+    help="Attach an image to the task (multimodal). Repeatable. "
+    "Only sent when the selected model supports multimodal input.",
+)
 def run(
     task: str | None,
     file_path: str | None,
@@ -213,6 +223,7 @@ def run(
     trajectory_file: str | None = None,
     console_type: str | None = "simple",
     agent_type: str | None = "trae_agent",
+    images: tuple[str, ...] = (),
     # --- Add Docker Mode ---
     docker_image: str | None = None,
     docker_container_id: str | None = None,
@@ -290,7 +301,7 @@ def run(
             )
             sys.exit(1)
         try:
-            task = Path(file_path).read_text()
+            task = Path(file_path).read_text(encoding='utf-8')
         except FileNotFoundError:
             console.print(f"[red]Error: File not found: {file_path}[/red]")
             sys.exit(1)
@@ -313,6 +324,22 @@ def run(
     if not agent_type:
         console.print("[red]Error: agent_type is required.[/red]")
         sys.exit(1)
+
+    # --- Multimodal: load attached images ---
+    images_list = None
+    if images:
+        try:
+            images_list = load_images(list(images))
+        except (FileNotFoundError, ValueError) as e:
+            console.print(f"[red]Error loading image: {e}[/red]")
+            sys.exit(1)
+        # 模型不支持多模态 → 优雅降级,忽略图片(否则 API 会报错)。
+        if config.trae_agent and not config.trae_agent.model.supports_multimodal:
+            console.print(
+                "[yellow]Warning: the selected model does not support "
+                "multimodal input; attached images will be ignored.[/yellow]"
+            )
+            images_list = None
 
     # Create CLI Console
     console_mode = ConsoleMode.RUN
@@ -398,7 +425,7 @@ def run(
             cli_console.set_agent_context(agent, config.trae_agent, config_file, trajectory_file)
 
         # Agent will handle starting the appropriate console
-        _ = asyncio.run(agent.run(task, task_args))
+        _ = asyncio.run(agent.run(task, task_args, images=images_list))
 
         console.print(f"\n[green]Trajectory saved to: {agent.trajectory_file}[/green]")
 
@@ -443,6 +470,15 @@ def run(
     default="trae_config.yaml",
     envvar="TRAE_CONFIG_FILE",
 )
+@click.option(
+    "--image",
+    "-i",
+    "images",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+    help="Attach an image to the task (multimodal). Repeatable. "
+    "Only sent when the selected model supports multimodal input.",
+)
 def plan(
     task: str | None,
     file_path: str | None,
@@ -451,6 +487,7 @@ def plan(
     max_steps: int | None = None,
     working_dir: str | None = None,
     config_file: str = "trae_config.yaml",
+    images: tuple[str, ...] = (),
 ):
     """
     Plan mode — read-only exploration. Same syntax as `trae run`, but the
@@ -463,7 +500,7 @@ def plan(
             console.print("[red]Cannot use both a task string and the --file argument.[/red]")
             sys.exit(1)
         try:
-            task = Path(file_path).read_text()
+            task = Path(file_path).read_text(encoding='utf-8')
         except FileNotFoundError:
             console.print(f"[red]File not found: {file_path}[/red]")
             sys.exit(1)
@@ -480,6 +517,21 @@ def plan(
         model=model,
         max_steps=max_steps,
     )
+
+    # --- Multimodal: load attached images ---
+    images_list = None
+    if images:
+        try:
+            images_list = load_images(list(images))
+        except (FileNotFoundError, ValueError) as e:
+            console.print(f"[red]Error loading image: {e}[/red]")
+            sys.exit(1)
+        if config.trae_agent and not config.trae_agent.model.supports_multimodal:
+            console.print(
+                "[yellow]Warning: the selected model does not support "
+                "multimodal input; attached images will be ignored.[/yellow]"
+            )
+            images_list = None
 
     working_dir = working_dir or os.getcwd()
     if not Path(working_dir).is_absolute():
@@ -531,7 +583,7 @@ def plan(
             "issue": task,
             "must_patch": "false",
         }
-        _ = asyncio.run(agent.run(task, task_args))
+        _ = asyncio.run(agent.run(task, task_args, images=images_list))
     except KeyboardInterrupt:
         console.print("\n[yellow]Plan interrupted.[/yellow]")
         sys.exit(1)
