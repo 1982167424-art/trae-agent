@@ -36,11 +36,21 @@ class ModelConfig:
     model_provider: ModelProvider
     temperature: float
     top_p: float
-    top_k: int
     parallel_tool_calls: bool
     max_retries: int
+    # top_k 语义约定(Issue 4 统一):
+    #   0  = 未配置 → 各 client 不发送该参数(走 provider 默认值)
+    #   >0 = 显式配置 → 原样发送给支持 top_k 的 provider(Anthropic/Gemini)
+    # OpenAI 系(OpenAI/MiniMax/NVIDIA/Azure/Ollama 兼容协议)目前一律不发送
+    # top_k(协议本身不支持),无论取值。
+    # 默认 0,这样省略 yaml 字段时不会因缺位置参数而抛 TypeError。
+    top_k: int = 0
     max_tokens: int | None = None  # Legacy max_tokens parameter, optional
     supports_tool_calling: bool = True
+    # Whether this model can consume images (multimodal input).
+    # Opt-in: most configured models are text-only, so we default to
+    # False and only flip it on for vision-capable models.
+    supports_multimodal: bool = False
     candidate_count: int | None = None  # Gemini specific field
     stop_sequences: list[str] | None = None
     max_completion_tokens: int | None = None  # Azure OpenAI specific field

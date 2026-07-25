@@ -64,10 +64,15 @@ class GoogleClient(BaseLLMClient):
         current_chat_contents = newly_parsed_messages
 
         # Set up generation config
+        # Issue 4: top_k 统一语义 — 0 表示"未配置",不传给 Gemini SDK
+        # (Gemini 要求 top_k >= 1,传 0 会报错)。仅当 >0 时才下发。
+        top_k_value = (
+            model_config.top_k if model_config.top_k and model_config.top_k > 0 else None
+        )
         generation_config = types.GenerateContentConfig(
             temperature=model_config.temperature,
             top_p=model_config.top_p,
-            top_k=model_config.top_k,
+            top_k=top_k_value,
             max_output_tokens=model_config.max_tokens,
             candidate_count=model_config.candidate_count,
             stop_sequences=model_config.stop_sequences,

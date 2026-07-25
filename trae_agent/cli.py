@@ -4,6 +4,7 @@
 """Command Line Interface for Trae Agent."""
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -486,20 +487,21 @@ def plan(
         working_dir = os.path.abspath(working_dir)
 
     # Force plan mode.
+    # Issue 2 修复:此前三版提交(b0f8e35 / 80da4b4 / 089a633)对 plan 模式
+    # 的 max_steps 行为描述互相矛盾,实际逻辑也有坑:
+    #   旧逻辑用 `config.max_steps or 30` → 用户 yaml 里写了 `max_steps: 200`
+    #   (这是给 run 模式用的) 时,plan 模式会把 200 强制压回 30 并打 warning,
+    #   把用户的配置静默覆盖,且 warning 还误导用户"用 --max-steps 设更大值"。
+    # 统一后的语义(只此一条规则,不再有歧义):
+    #   - 显式 --max-steps N         → 用 N(用户说话算数,即便 N>30 也不限)
+    #   - 未传 --max-steps           → plan 模式用 30(独立于 run 模式的配置值,
+    #                                  plan 是只读探索,不需要 run 模式的 200 步)
+    # 这样 plan 模式的默认步数与 run 模式配置完全解耦,避免相互覆盖。
     if config.trae_agent:
         if max_steps is not None:
             config.trae_agent.max_steps = max_steps
         else:
-            config.trae_agent.max_steps = config.trae_agent.max_steps or 30
-            # Heuristic: plan 模式默认上限 30,避免无限制狂奔。
-            # 仅当用户未显式指定时才施加上限,否则用户的 --max-steps 会被强制压回 30。
-            if config.trae_agent.max_steps > 30:
-                console.print(
-                    f"[yellow]Warning: plan mode caps max_steps at 30. "
-                    f"Config value {config.trae_agent.max_steps} overridden. "
-                    f"Use --max-steps to explicitly set a higher value.[/yellow]"
-                )
-                config.trae_agent.max_steps = 30
+            config.trae_agent.max_steps = 30
 
     cli_console = ConsoleFactory.create_console(
         console_type=ConsoleType.SIMPLE, mode=ConsoleMode.RUN

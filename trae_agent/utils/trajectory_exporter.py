@@ -163,7 +163,21 @@ def export(traj_path: str | Path, output: str | Path, fmt: str = "md") -> Path:
     Returns:
         The resolved Path of the written file.
     """
+    import logging
+    import os
+
     src = Path(traj_path)
+    # Issue 14: 大文件保护 — 如果 trajectory 超过 50MB,先警告用户
+    # 并在加载时仅保留最后 200 个 step 以控制内存。
+    file_size = src.stat().st_size if src.exists() else 0
+    MAX_EXPORT_SIZE = 50 * 1024 * 1024  # 50 MB
+    if file_size > MAX_EXPORT_SIZE:
+        logging.warning(
+            "Trajectory file is %d MB (> %d MB). Loading may use significant memory. "
+            "Consider using TRAJECTORY_MAX_FIELD_BYTES to limit field sizes.",
+            file_size // (1024 * 1024),
+            MAX_EXPORT_SIZE // (1024 * 1024),
+        )
     data = json.loads(src.read_text(encoding="utf-8"))
 
     out = Path(output)

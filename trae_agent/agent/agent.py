@@ -61,10 +61,18 @@ class Agent:
         task: str,
         extra_args: dict[str, str] | None = None,
         tool_names: list[str] | None = None,
+        images: list | None = None,
     ):
-        self.agent.new_task(task, extra_args, tool_names)
+        self.agent.new_task(task, extra_args, tool_names, images=images)
 
-        if self.agent.allow_mcp_servers:
+        # Issue 1 修复: allow_mcp_servers 语义此前在三处代码间反复横跳:
+        #   - discover_mcp_tools: None=不限制, []=全部拒绝, [a,b]=白名单(正确)
+        #   - agent.run 入口:     `if allow_mcp_servers:` (truthy 检查)
+        # 二者不一致 → 当 allow_mcp_servers=None(语义=允许所有)时,这个 if 判
+        # 断为 False,MCP 永远不会初始化,"None=允许所有"语义静默失效。
+        # 修正:以 mcp_servers_config 是否存在为准(有 server 配置就尝试发现),
+        # 是否允许某 server 的细粒度过滤交给 discover_mcp_tools 内部决定。
+        if self.agent.mcp_servers_config:
             if self.agent.cli_console:
                 self.agent.cli_console.print("Initialising MCP tools...")
             await self.agent.initialise_mcp()

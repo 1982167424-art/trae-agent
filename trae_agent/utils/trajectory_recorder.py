@@ -31,6 +31,41 @@ logger = logging.getLogger(__name__)
 _write_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="traj-writer")
 
 
+# Issue 8 修复: trajectory 文件此前没有任何大小保护 —— 长任务会把每步的完整
+# LLM 历史 + 大段工具输出原样塞进 JSON,单文件可达数 GB,加载/导出极慢,甚至
+# 撑爆磁盘。这里加两层保护(均可通过环境变量覆盖):
+#   TRAJECTORY_MAX_FIELD_BYTES  单个字符串字段(text/result/error)的截断阈值,
+#                               超过就保留首尾各一半并加 [truncated] 标记。
+#   TRAJECTORY_MAX_INTERACTIONS llm_interactions 数组的硬上限,超过则丢弃最旧
+#                               的(它们是冗余的累积历史,信息密度最低)。
+_MAX_FIELD_BYTES = max(1024, int(os.environ.get("TRAJECTORY_MAX_FIELD_BYTES", str(50 * 1024))))
+_MAX_INTERACTIONS = max(10, int(os.environ.get("TRAJECTORY_MAX_INTERACTIONS", "200")))
+
+
+def _truncate_field(value: str | None) -> str | None:
+    """Truncate a long string field in place to keep the trajectory file bounded.
+
+    Keeps the head and tail so callers can still see the start/end of long
+    tool outputs or model responses. Returns ``None`` unchanged.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+    if len(value.encode("utf-8", errors="replace")) <= _MAX_FIELD_BYTES:
+        return value
+    # 按字符数估算(UTF-8 下字节数 >= 字符数),取头尾各一半。
+    half_chars = _MAX_FIELD_BYTES // 4
+    original_len = len(value)
+    head = value[:half_chars]
+    tail = value[-half_chars:] if half_chars > 0 else ""
+    marker = (
+        f"\n[...truncated {original_len - len(head) - len(tail)} chars "
+        f"/ set TRAJECTORY_MAX_FIELD_BYTES to enlarge...]\n"
+    )
+    return head + marker + tail
+
+
 class TrajectoryRecorder:
     """Records trajectory data for agent execution and LLM interactions."""
 
@@ -99,7 +134,8 @@ class TrajectoryRecorder:
             "model": model,
             "input_messages": [self._serialize_message(msg) for msg in messages],
             "response": {
-                "content": response.content,
+                # Issue 8: 模型输出可能极长(尤其带长 tool_call 参数),截断保护。
+                "content": _truncate_field(response.content),
                 "model": response.model,
                 "finish_reason": response.finish_reason,
                 "usage": {
@@ -126,6 +162,10 @@ class TrajectoryRecorder:
             "tools_available": [tool.name for tool in tools] if tools else None,
         }
         self.trajectory_data["llm_interactions"].append(interaction)
+        # Issue 8: 硬上限,超过则丢弃最旧的(信息密度最低的累积历史)。
+        interactions = self.trajectory_data["llm_interactions"]
+        if len(interactions) > _MAX_INTERACTIONS:
+            self.trajectory_data["llm_interactions"] = interactions[-_MAX_INTERACTIONS:]
         self._async_save()
 
     def record_agent_step(
@@ -147,7 +187,7 @@ class TrajectoryRecorder:
             if llm_messages
             else None,
             "llm_response": {
-                "content": llm_response.content,
+                "content": _truncate_field(llm_response.content),
                 "model": llm_response.model,
                 "finish_reason": llm_response.finish_reason,
                 "usage": {
@@ -259,12 +299,50 @@ class TrajectoryRecorder:
     # -------- serialization helpers ------------------------------------------
 
     def _serialize_message(self, message: LLMMessage) -> dict[str, Any]:
-        data: dict[str, Any] = {"role": message.role, "content": message.content}
+        data: dict[str, Any] = {
+            "role": message.role,
+            "content": self._serialize_content(message.content),
+        }
         if message.tool_call:
             data["tool_call"] = self._serialize_tool_call(message.tool_call)
         if message.tool_result:
             data["tool_result"] = self._serialize_tool_result(message.tool_result)
         return data
+
+    @staticmethod
+    def _serialize_content(content: Any) -> Any:
+        """Serialize message content for the trajectory file.
+
+        Multimodal content lists may carry base64 image data that would bloat
+        the trajectory JSON to many MB. Keep the text parts, but replace each
+        image part with a small redaction placeholder.
+        """
+        if not isinstance(content, list):
+            return content
+        parts: list[Any] = []
+        for part in content:
+            part_type = getattr(part, "type", None)
+            if part_type is None and isinstance(part, dict):
+                part_type = part.get("type")
+            if part_type in ("image", "image_url"):
+                media_type = getattr(part, "media_type", None)
+                if media_type is None and isinstance(part, dict):
+                    media_type = part.get("media_type")
+                parts.append(
+                    {
+                        "type": "image",
+                        "media_type": media_type,
+                        "data": "[image data redacted from trajectory]",
+                    }
+                )
+            elif part_type == "text" or hasattr(part, "text"):
+                text = getattr(part, "text", None)
+                if text is None and isinstance(part, dict):
+                    text = part.get("text")
+                parts.append({"type": "text", "text": _truncate_field(text)})
+            else:
+                parts.append(str(part))
+        return parts
 
     def _serialize_tool_call(self, tool_call: ToolCall) -> dict[str, Any]:
         return {
@@ -280,8 +358,9 @@ class TrajectoryRecorder:
             # (ToolResult dataclass 没有这个字段)。fallback 到 `call_id` 即可。
             "call_id": getattr(tool_result, "call_id", None),
             "success": tool_result.success,
-            "result": tool_result.result,
-            "error": tool_result.error,
+            # Issue 8: 截断超长结果,避免几 GB 的 trajectory 文件。
+            "result": _truncate_field(tool_result.result),
+            "error": _truncate_field(tool_result.error),
             "id": getattr(tool_result, "id", None),
         }
 
