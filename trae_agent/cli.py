@@ -143,6 +143,20 @@ def cli():
 @click.option("--working-dir", "-w", help="Working directory for the agent")
 @click.option("--must-patch", "-mp", is_flag=True, help="Whether to patch the code")
 @click.option(
+    "--image",
+    "-i",
+    "image_paths",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+    help=(
+        "Path to an image file to send to a vision-language model (e.g. "
+        "kimi-vl-a3b on Ollama, GPT-4o, Claude 3, Gemini). Repeatable: "
+        "--image a.png --image b.png. Each provider's client converts the "
+        "bytes to its native multimodal format; providers that don't "
+        "support vision input ignore the field."
+    ),
+)
+@click.option(
     "--config-file",
     help="Path to configuration file",
     default="trae_config.yaml",
@@ -209,6 +223,7 @@ def run(
     max_steps: int | None = None,
     working_dir: str | None = None,
     must_patch: bool = False,
+    image_paths: tuple[str, ...] = (),
     config_file: str = "trae_config.yaml",
     trajectory_file: str | None = None,
     console_type: str | None = "simple",
@@ -386,11 +401,25 @@ def run(
         pass
 
     try:
+        # Read image files into bytes for multimodal (vision) models.
+        # Each provider's client converts the bytes to its native format
+        # (Ollama透传 / OpenAI image_url / Anthropic image source / Gemini Part).
+        image_bytes: list[bytes] = []
+        for img_path in image_paths:
+            try:
+                image_bytes.append(Path(img_path).read_bytes())
+            except OSError as e:
+                console.print(f"[red]Error reading image {img_path}: {e}[/red]")
+                sys.exit(1)
+        if image_bytes:
+            console.print(f"[blue]Loaded {len(image_bytes)} image(s) for vision input.[/blue]")
+
         task_args = {
             "project_path": working_dir,
             "issue": task,
             "must_patch": "true" if must_patch else "false",
             "patch_path": patch_path,
+            "images": image_bytes,
         }
 
         # Set up agent context for rich console if applicable

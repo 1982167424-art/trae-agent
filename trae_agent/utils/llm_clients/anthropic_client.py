@@ -3,6 +3,7 @@
 
 """Anthropic API client wrapper with tool integration."""
 
+import base64
 from typing_extensions import override
 
 import anthropic
@@ -11,7 +12,7 @@ from anthropic.types.tool_union_param import TextEditor20250429
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage, detect_image_mime
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -214,9 +215,48 @@ class AnthropicClient(BaseLLMClient):
                 if not msg.content:
                     raise ValueError("Message content is required")
 
-                anthropic_messages.append(
-                    anthropic.types.MessageParam(role=role, content=msg.content)
-                )
+                # 多模态:带 images 的 user 消息按 Anthropic 规范用 content
+                # block list(text + image source=base64)发送。images 元素是
+                # bytes 时检测 MIME 并 base64 编码;是 str 时假定已是 base64
+                # 字符串(原样入 data)。assistant 角色不携带 images。
+                if msg.images and role == "user":
+                    content_blocks: list = [{"type": "text", "text": msg.content}]
+                    for img in msg.images:
+                        if isinstance(img, (bytes, bytearray)):
+                            mime = detect_image_mime(bytes(img))
+                            content_blocks.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": mime,
+                                        "data": base64.b64encode(bytes(img)).decode("ascii"),
+                                    },
+                                }
+                            )
+                        else:
+                            # str: 已是 base64 字符串。Anthropic source.data 需要
+                            # 纯 base64(不含 data: 前缀),剥一下。
+                            s = str(img)
+                            if s.startswith("data:") and "," in s:
+                                s = s.split(",", 1)[1]
+                            content_blocks.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": s,
+                                    },
+                                }
+                            )
+                    anthropic_messages.append(
+                        anthropic.types.MessageParam(role=role, content=content_blocks)
+                    )
+                else:
+                    anthropic_messages.append(
+                        anthropic.types.MessageParam(role=role, content=msg.content)
+                    )
         return anthropic_messages, system_message
 
     def parse_tool_call(self, tool_call: ToolCall) -> anthropic.types.ToolUseBlockParam:

@@ -260,7 +260,17 @@ class TraeAgent(BaseAgent):
                     "issue within our repository. Here's the issue text:\n"
                     f"{extra_args['issue']}\n"
                 )
-            self._initial_messages.append(LLMMessage(role="user", content=user_message))
+            # 多模态输入:CLI --image 传入的图片挂在首条用户消息上,使视觉语言
+            # 模型能够真正看到图片。各 provider 的 client 会按本 provider 的
+            # API 规范把 images 转成对应格式;不支持视觉的 provider 会忽略。
+            images_payload: list[bytes | str] | None = extra_args.get("images") or None
+            self._initial_messages.append(
+                LLMMessage(
+                    role="user",
+                    content=user_message,
+                    images=images_payload,
+                )
+            )
         # else: resume mode — _initial_messages already populated by
         # resume_from_messages(). Do NOT clobber them.
 

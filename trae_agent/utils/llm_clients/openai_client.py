@@ -20,7 +20,7 @@ from openai.types.responses.response_input_param import FunctionCallOutput
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage, bytes_to_data_url
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -191,7 +191,23 @@ class OpenAIClient(BaseLLMClient):
                 if msg.role == "system":
                     openai_messages.append({"role": "system", "content": msg.content})
                 elif msg.role == "user":
-                    openai_messages.append({"role": "user", "content": msg.content})
+                    # 多模态:带 images 的 user 消息按 OpenAI Responses API 规范
+                    # 用 content list(input_text + input_image blocks)发送。
+                    # bytes → data URL;str → 原样透传(URL / data URL / file_id)。
+                    if msg.images:
+                        content_blocks: list = [{"type": "input_text", "text": msg.content}]
+                        for img in msg.images:
+                            if isinstance(img, (bytes, bytearray)):
+                                content_blocks.append(
+                                    {"type": "input_image", "image_url": bytes_to_data_url(bytes(img))}
+                                )
+                            else:
+                                content_blocks.append(
+                                    {"type": "input_image", "image_url": str(img)}
+                                )
+                        openai_messages.append({"role": "user", "content": content_blocks})
+                    else:
+                        openai_messages.append({"role": "user", "content": msg.content})
                 elif msg.role == "assistant":
                     openai_messages.append({"role": "assistant", "content": msg.content})
                 else:
