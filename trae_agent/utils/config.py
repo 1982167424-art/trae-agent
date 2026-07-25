@@ -399,7 +399,8 @@ def resolve_config_value(
     env_var: str | None = None,
 ) -> int | str | float | None:
     """Resolve configuration value with priority: CLI > ENV > Config > Default."""
-    if cli_value is not None:
+    # #6 修复:空字符串视为"未提供",回退到 env/配置,而不是返回空串。
+    if cli_value is not None and cli_value != "":
         return cli_value
 
     if env_var and os.getenv(env_var):

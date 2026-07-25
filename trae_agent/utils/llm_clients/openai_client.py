@@ -183,6 +183,11 @@ class OpenAIClient(BaseLLMClient):
         for msg in messages:
             if msg.tool_result:
                 openai_messages.append(self.parse_tool_call_result(msg.tool_result))
+                # #9 修复:tool_result 消息带 content 时,补一条 user 文本消息,
+                # 与 tool 消息分开发送(OpenAI 里 tool 是独立 role,不会造成
+                # 连续 user)。
+                if msg.content:
+                    openai_messages.append({"role": "user", "content": msg.content})
             elif msg.tool_call:
                 openai_messages.append(self.parse_tool_call(msg.tool_call))
             else:

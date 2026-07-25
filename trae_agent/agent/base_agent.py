@@ -430,6 +430,15 @@ class BaseAgent(ABC):
             # P1-15 修复:reflection 是"工具失败 → 用户视角反馈",
             # 语义是 role="user"(让模型知道 tool output 不行),而不是
             # role="assistant"(否则破坏 user/assistant 交替,部分 provider 会拒绝)。
-            messages.append(LLMMessage(role="user", content=reflection))
+            # #9 修复:若上一条消息已是 role="user"(通常是 tool_result),
+            # 把 reflection 折叠进该消息的 content,而不是新增一条 user 消息,
+            # 否则会出现连续两条 user 消息,Anthropic 等 provider 会直接拒绝请求。
+            # 客户端在 tool_result 消息同时带 content 时会作为同一用户回合里的
+            # 文本块一并发送(见 openai/anthropic client 的 parse_messages)。
+            if messages and messages[-1].role == "user":
+                prev = messages[-1]
+                prev.content = (prev.content or "") + "\n\n" + reflection
+            else:
+                messages.append(LLMMessage(role="user", content=reflection))
 
         return messages

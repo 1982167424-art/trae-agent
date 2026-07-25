@@ -191,11 +191,13 @@ class AnthropicClient(BaseLLMClient):
                     elif isinstance(system_message, str):
                         system_message = system_message + "\n\n" + msg.content
             elif msg.tool_result:
+                # #9 修复:tool_result 消息可能同时带 content(reflection 折叠进来),
+                # 一并作为同一条 user 消息里的文本块发送,避免连续 user 消息。
+                blocks = [self.parse_tool_call_result(msg.tool_result)]
+                if msg.content:
+                    blocks.append({"type": "text", "text": msg.content})
                 anthropic_messages.append(
-                    anthropic.types.MessageParam(
-                        role="user",
-                        content=[self.parse_tool_call_result(msg.tool_result)],
-                    )
+                    anthropic.types.MessageParam(role="user", content=blocks)
                 )
             elif msg.tool_call:
                 anthropic_messages.append(

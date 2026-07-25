@@ -90,7 +90,7 @@ if command -v python3 >/dev/null 2>&1; then
 elif command -v python >/dev/null 2>&1; then
     PY=python
 else
-    echo "✗ Python 3.10+ is required but not installed." >&2
+    echo "✗ Python 3.12+ is required but not installed." >&2
     echo "  Install it from https://www.python.org/" >&2
     exit 1
 fi
@@ -99,8 +99,8 @@ PY_VERSION=$("$PY" -c "import sys; print(f'{sys.version_info.major}.{sys.version
 PY_MAJOR=$("$PY" -c "import sys; print(sys.version_info.major)")
 PY_MINOR=$("$PY" -c "import sys; print(sys.version_info.minor)")
 
-if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-    echo "✗ Python 3.10+ required, found $PY_VERSION" >&2
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 12 ]; }; then
+    echo "✗ Python 3.12+ required, found $PY_VERSION" >&2
     exit 1
 fi
 echo "  ✓ Python $PY_VERSION"

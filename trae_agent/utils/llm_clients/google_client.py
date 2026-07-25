@@ -67,12 +67,15 @@ class GoogleClient(BaseLLMClient):
         generation_config = types.GenerateContentConfig(
             temperature=model_config.temperature,
             top_p=model_config.top_p,
-            top_k=model_config.top_k,
             max_output_tokens=model_config.max_tokens,
             candidate_count=model_config.candidate_count,
             stop_sequences=model_config.stop_sequences,
             system_instruction=current_system_instruction,
         )
+        # #14 修复:Google GenAI 不接受 top_k=0(要求 >= 1),未配置时留给 SDK 用
+        # 默认值,与 anthropic_client 对 top_k<=0 跳过的处理保持一致。
+        if model_config.top_k and model_config.top_k > 0:
+            generation_config.top_k = model_config.top_k
 
         # Add tools if provided
         if tools:
