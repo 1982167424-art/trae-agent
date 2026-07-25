@@ -207,5 +207,5 @@ models:
 model_routing:
     vision: trae_agent_model
     strong: trae_agent_model
-    fast: doubao_stream_1
+    fast: qwen2_5_coder_7b
     tiny: qwen2_5_coder_0_5b
