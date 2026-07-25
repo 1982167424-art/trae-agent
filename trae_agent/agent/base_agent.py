@@ -123,8 +123,11 @@ class BaseAgent(ABC):
     def set_trajectory_recorder(self, recorder: TrajectoryRecorder | None) -> None:
         """Set the trajectory recorder for this agent."""
         self._trajectory_recorder = recorder
-        # Also set it on the LLM client
-        self._llm_client.set_trajectory_recorder(recorder)
+        # Also set it on the LLM client. In auto-routing mode the client
+        # is created lazily in new_task(), so it may be None here;
+        # _resolve_model() will bind the recorder once the client exists.
+        if self._llm_client is not None:
+            self._llm_client.set_trajectory_recorder(recorder)
 
     @property
     def cli_console(self) -> CLIConsole | None:

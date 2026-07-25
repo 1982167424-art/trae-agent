@@ -82,3 +82,54 @@ def test_sticky_does_not_thrash_on_soft_signals():
     # 当前是 fast(本地,非多模态),但本步没有图片 → 不切
     current = _mc(multimodal=False)
     assert r.select_for_constraints(False, current) is None
+
+
+def _mini_model(*, provider: str, model: str, multimodal: bool = False):
+    from trae_agent.utils.config import ModelConfig, ModelProvider
+
+    return ModelConfig(
+        model=model,
+        model_provider=ModelProvider(api_key="test", provider=provider),
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        parallel_tool_calls=False,
+        max_retries=1,
+        supports_multimodal=multimodal,
+    )
+
+
+def _mini_routing_config():
+    from trae_agent.utils.config import TraeAgentConfig
+
+    strong = _mini_model(provider="doubao", model="ep-strong", multimodal=True)
+    fast = _mini_model(provider="ollama", model="qwen2.5-coder:7b")
+    routing = ModelRoutingConfig(vision="strong", strong="strong", fast="fast", tiny=None)
+    return TraeAgentConfig(
+        model=strong,
+        tools=["bash"],
+        max_steps=5,
+        model_routing=routing,
+        all_models={"strong": strong, "fast": fast},
+        allow_mcp_servers=None,
+        mcp_servers_config={},
+    )
+
+
+def test_routing_defers_client_and_accepts_recorder():
+    """Regression: set_trajectory_recorder must not crash in routing mode
+    where the LLM client is created lazily (was None -> AttributeError)."""
+    from trae_agent.agent.trae_agent import TraeAgent
+    from trae_agent.utils.trajectory_recorder import TrajectoryRecorder
+
+    agent = TraeAgent(trae_agent_config=_mini_routing_config())
+    # routing defers client creation
+    assert agent._llm_client is None
+    assert agent._model_config is None
+    # this used to raise AttributeError ('NoneType' has no attribute ...)
+    rec = TrajectoryRecorder(trajectory_path="/tmp/_routing_rec_smoke.json")
+    agent.set_trajectory_recorder(rec)
+    assert agent._trajectory_recorder is rec
+    # resolving a model builds the client and binds the recorder
+    agent.new_task("写个快速脚本", extra_args={"project_path": "/tmp"})
+    assert agent._llm_client is not None
