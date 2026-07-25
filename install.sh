@@ -139,12 +139,37 @@ if [ -n "$UV" ]; then
     # pexpect, unidiff). Otherwise the first `trae` invocation crashes
     # with ModuleNotFoundError before any command runs.
     #
-    # We use PEP 508 extras syntax in --with, which is the only form
-    # that uv recognises for extras from a git+ dependency.
-    "$UV" tool install --with "trae-agent[evaluation]" --from "git+${REPO_URL}" trae-agent --force 2>&1 | tail -5 || {
-        echo "✗ uv tool install failed. Trying alternative..." >&2
-        "$UV" pip install --system "trae-agent[evaluation] @ git+${REPO_URL}" 2>&1 | tail -5
-    }
+    # Issue 6: --with "pkg[extras]" --from "git+URL" syntax requires
+    # uv >= 0.5.0. Older versions silently ignore --with or error out.
+    # Check the version and fall back to pipx if uv is too old.
+    UV_VERSION=$("$UV" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    UV_MAJOR=$(echo "$UV_VERSION" | cut -d. -f1)
+    UV_MINOR=$(echo "$UV_VERSION" | cut -d. -f2)
+    UV_TOO_OLD=0
+    if [ -z "$UV_MAJOR" ] || [ "$UV_MAJOR" -lt 0 ] 2>/dev/null; then
+        UV_TOO_OLD=1
+    elif [ "$UV_MAJOR" -eq 0 ] && { [ -z "$UV_MINOR" ] || [ "$UV_MINOR" -lt 5 ]; } 2>/dev/null; then
+        UV_TOO_OLD=1
+    fi
+
+    if [ "$UV_TOO_OLD" -eq 1 ]; then
+        echo "  → uv $UV_VERSION is too old for --with extras (need >= 0.5.0), trying pipx..." >&2
+        if command -v pipx >/dev/null 2>&1; then
+            pipx install "trae-agent[evaluation] @ git+${REPO_URL}" 2>&1 | tail -5
+        else
+            echo "✗ uv too old and pipx not found. Please upgrade uv: uv self update" >&2
+            exit 1
+        fi
+    else
+        "$UV" tool install --with "trae-agent[evaluation]" --from "git+${REPO_URL}" trae-agent --force 2>&1 | tail -5 || {
+            echo "✗ uv tool install failed. Trying alternative..." >&2
+            if command -v pipx >/dev/null 2>&1; then
+                pipx install "trae-agent[evaluation] @ git+${REPO_URL}" 2>&1 | tail -5
+            else
+                "$UV" pip install --system "trae-agent[evaluation] @ git+${REPO_URL}" 2>&1 | tail -5
+            fi
+        }
+    fi
     TOOL_BIN="$HOME/.local/bin/trae-cli"
     if [ -e "$TOOL_BIN" ]; then
         # User-wide alias — creates `trae` regardless of $INSTALL_BIN.
