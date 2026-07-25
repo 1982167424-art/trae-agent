@@ -30,7 +30,7 @@ class Agent:
             self.trajectory_file: str = trajectory_file
             self.trajectory_recorder: TrajectoryRecorder = TrajectoryRecorder(trajectory_file)
         else:
-            # Auto-generate trajectory file path
+            # Auto-generate trajectory file path in Desktop/trae-agent-outputs/<project>/
             self.trajectory_recorder = TrajectoryRecorder()
             self.trajectory_file = self.trajectory_recorder.get_trajectory_path()
 
