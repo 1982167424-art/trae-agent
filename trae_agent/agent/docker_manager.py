@@ -25,6 +25,7 @@ class DockerManager:
         workspace_dir: str | None = None,
         tools_dir: str | None = None,
         interactive: bool = False,
+        container_workspace: str | None = None,
     ):
         if not image and not container_id and not dockerfile_path and not docker_image_file:
             raise ValueError(
@@ -38,7 +39,11 @@ class DockerManager:
         self.workspace_dir = workspace_dir
         self.tools_dir = tools_dir
         self.interactive = interactive
-        self.container_workspace = "/workspace"
+        # Issue 7 修复: 此前 container_workspace 硬编码为 "/workspace",
+        # 用户在自定义镜像里把工作目录设到别处(如 /app、/srv)时,挂载点和工作
+        # 目录对不上,容器内文件操作全部失败。现允许由调用方传入 docker_config
+        # 的 container_workspace 字段覆盖;不传则保留默认 "/workspace" 以兼容。
+        self.container_workspace = container_workspace or "/workspace"
         self.container = None
         self.shell = None
         self._is_managed = True

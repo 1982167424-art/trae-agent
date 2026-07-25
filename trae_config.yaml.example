@@ -8,6 +8,11 @@ agents:
             - str_replace_based_edit_tool
             - sequentialthinking
             - task_done
+# allow_mcp_servers 控制 mcp_servers 中哪些 server 会被连接并发现工具。
+#   删除本键 (None)         → 允许所有 mcp_servers (默认,推荐大多数用户)
+#   allow_mcp_servers: []   → 显式拒绝所有 server (一个都不连接)
+#   allow_mcp_servers:      → 仅连接白名单中的 server
+#     - playwright
 allow_mcp_servers:
     - playwright
 mcp_servers:

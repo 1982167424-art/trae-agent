@@ -25,6 +25,7 @@ Inspired by Claude Code and OpenCode's skills/extensions system.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,6 +134,21 @@ def load_skill_file(path: Path) -> Skill | None:
     break the whole skill set). Use ``validate_skill`` to inspect why a
     particular file was rejected.
     """
+    # Issue 10 修复: 检查 skill 文件权限,防止 prompt injection。
+    # 如果文件是 world-writable 的(任何用户都能写入),则跳过加载,
+    # 避免恶意用户通过篡改 skill 文件注入 prompt。
+    try:
+        stat = path.stat()
+        # 检查 other-write 位 (S_IWOTH = 0o002)
+        if stat.st_mode & 0o002:
+            logger.warning(
+                "Skipping skill %s: file is world-writable (mode %o), "
+                "which is a security risk. Fix with: chmod o-w %s",
+                path, stat.st_mode, path,
+            )
+            return None
+    except OSError:
+        pass  # 如果 stat 失败,让 validate_skill 处理
     try:
         skill = validate_skill(path)
     except SkillValidationError as e:
