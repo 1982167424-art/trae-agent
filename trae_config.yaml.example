@@ -30,6 +30,16 @@ model_providers:
         api_key: ollama
         provider: ollama
         base_url: http://localhost:11434/v1
+    # MiniMax (OpenAI 兼容协议, 在线推理) - 需设置 MINIMAX_API_KEY 环境变量
+    minimax:
+        api_key: ""
+        provider: minimax
+        base_url: https://api.minimax.io/v1
+    # NVIDIA NIM (OpenAI 兼容协议, 在线推理) - 需设置 NVIDIA_API_KEY 环境变量
+    nvidia:
+        api_key: ""
+        provider: nvidia
+        base_url: https://integrate.api.nvidia.com/v1
 
 models:
     trae_agent_model:
@@ -83,6 +93,35 @@ models:
     kimi_vl_a3b_instruct:
         model_provider: ollama
         model: kimi-vl-a3b
+        max_tokens: 8192
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 0
+        max_retries: 10
+        parallel_tool_calls: false
+    # ===== MiniMax (在线推理, OpenAI 兼容协议) =====
+    minimax_m3:
+        model_provider: minimax
+        model: MiniMax-M3
+        max_tokens: 8192
+        temperature: 0.5
+        top_p: 0.95
+        top_k: 0
+        max_retries: 10
+        parallel_tool_calls: true
+    # ===== NVIDIA NIM (在线推理, OpenAI 兼容协议) =====
+    nvidia_kimi_k2:
+        model_provider: nvidia
+        model: moonshotai/kimi-k2.6
+        max_tokens: 8192
+        temperature: 0.5
+        top_p: 0.95
+        top_k: 0
+        max_retries: 10
+        parallel_tool_calls: true
+    nvidia_deepseek_r1:
+        model_provider: nvidia
+        model: deepseek-ai/deepseek-r1
         max_tokens: 8192
         temperature: 0.6
         top_p: 0.95
