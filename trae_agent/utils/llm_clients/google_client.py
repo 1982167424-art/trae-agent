@@ -3,6 +3,7 @@
 
 """Google Gemini API client wrapper with tool integration."""
 
+import base64
 import json
 import traceback
 import uuid
@@ -14,7 +15,7 @@ from google.genai import types
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage, detect_image_mime
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -188,9 +189,38 @@ class GoogleClient(BaseLLMClient):
                 )
             else:
                 role = "user" if msg.role == "user" else "model"
-                gemini_messages.append(
-                    types.Content(role=role, parts=[types.Part(text=msg.content or "")])
-                )
+                # 多模态:带 images 的 user 消息按 Gemini 规范用多个 Part
+                # (text + inline_data)发送。bytes 经 detect_image_mime 推断
+                # MIME 后用 Part.from_bytes;str 假定已是 base64 字符串,
+                # 走 Part.from_uri 不合适,这里也按 bytes 处理(decode 后再
+                # 编码略浪费,但保持调用方契约统一)。
+                if msg.images and role == "user":
+                    parts: list[types.Part] = [types.Part(text=msg.content or "")]
+                    for img in msg.images:
+                        if isinstance(img, (bytes, bytearray)):
+                            mime = detect_image_mime(bytes(img))
+                            parts.append(
+                                types.Part.from_bytes(data=bytes(img), mime_type=mime)
+                            )
+                        else:
+                            # str 路径:Gemini SDK 不直接接受 base64 字符串,
+                            # 解码成 bytes 再走 from_bytes。
+                            s = str(img)
+                            if s.startswith("data:") and "," in s:
+                                s = s.split(",", 1)[1]
+                            try:
+                                raw = base64.b64decode(s, validate=True)
+                                parts.append(
+                                    types.Part.from_bytes(data=raw, mime_type="image/png")
+                                )
+                            except Exception:
+                                # 不是 base64,跳过(避免单张坏图炸整个请求)。
+                                continue
+                    gemini_messages.append(types.Content(role=role, parts=parts))
+                else:
+                    gemini_messages.append(
+                        types.Content(role=role, parts=[types.Part(text=msg.content or "")])
+                    )
 
         return gemini_messages, system_instruction
 

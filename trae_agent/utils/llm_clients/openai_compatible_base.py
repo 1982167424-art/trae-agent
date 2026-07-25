@@ -27,7 +27,12 @@ from openai.types.shared_params.function_definition import FunctionDefinition
 from trae_agent.tools.base import Tool, ToolCall
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
+from trae_agent.utils.llm_clients.llm_basics import (
+    LLMMessage,
+    LLMResponse,
+    LLMUsage,
+    bytes_to_data_url,
+)
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -288,7 +293,32 @@ def _msg_role_handler(messages: list[ChatCompletionMessageParam], msg: LLMMessag
             case "user":
                 if not msg.content:
                     raise ValueError("User message content is required")
-                messages.append(ChatCompletionUserMessageParam(content=msg.content, role="user"))
+                # 多模态:带 images 的 user 消息按 OpenAI Chat Completions 规范
+                # 用 content list(text + image_url blocks)发送。各 OpenAI 兼容
+                # provider(Doubao / Azure / OpenRouter / NVIDIA / MiniMax)均遵循
+                # 此格式。images 元素可以是 bytes(转 data URL)或已是字符串的
+                # data URL / 远程 URL(原样透传)。
+                if msg.images:
+                    content_blocks: list = [
+                        {"type": "text", "text": msg.content},
+                    ]
+                    for img in msg.images:
+                        if isinstance(img, (bytes, bytearray)):
+                            content_blocks.append(
+                                {"type": "image_url", "image_url": {"url": bytes_to_data_url(bytes(img))}}
+                            )
+                        else:
+                            # str: 假定已是 URL 或 data URL。
+                            content_blocks.append(
+                                {"type": "image_url", "image_url": {"url": str(img)}}
+                            )
+                    messages.append(
+                        ChatCompletionUserMessageParam(content=content_blocks, role="user")  # type: ignore[arg-type]
+                    )
+                else:
+                    messages.append(
+                        ChatCompletionUserMessageParam(content=msg.content, role="user")
+                    )
             case "assistant":
                 if not msg.content:
                     raise ValueError("Assistant message content is required")

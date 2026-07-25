@@ -176,6 +176,56 @@ class TestCli(unittest.TestCase):
             args, _ = mock_agent.run.call_args
             self.assertEqual(args[0], "task.txt")
 
+    @patch("trae_agent.cli.resolve_config_file", return_value="test_config.yaml")
+    @patch("trae_agent.cli.Agent")
+    @patch("trae_agent.cli.asyncio.run")
+    @patch("trae_agent.cli.Config.create")
+    @patch("trae_agent.cli.ConsoleFactory.create_console")
+    def test_run_with_image_flag_passes_bytes_to_task_args(
+        self,
+        mock_create_console,
+        mock_config_create,
+        mock_asyncio_run,
+        mock_agent_class,
+        mock_resolve_config_file,
+    ):
+        """--image must read file bytes and forward them via task_args['images']."""
+        mock_config = MagicMock()
+        mock_config.trae_agent = MagicMock()
+        mock_config_create.return_value.resolve_config_values.return_value = mock_config
+        mock_agent = MagicMock()
+        mock_agent_class.return_value = mock_agent
+        mock_console = MagicMock()
+        mock_console.set_initial_task = MagicMock()
+        mock_console.set_agent_context = MagicMock()
+        mock_create_console.return_value = mock_console
+
+        with self.runner.isolated_filesystem():
+            with open("pic.png", "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\nfake-image-bytes")
+
+            result = self.runner.invoke(
+                cli, ["run", "describe the image", "--image", "pic.png", "--working-dir", "/tmp"]
+            )
+            self.assertEqual(result.exit_code, 0)
+
+            mock_agent.run.assert_called_once()
+            args, _ = mock_agent.run.call_args
+            self.assertEqual(args[0], "describe the image")
+            task_args = args[1] if len(args) > 1 else {}
+            self.assertIsInstance(task_args, dict)
+            images = task_args.get("images")
+            self.assertIsNotNone(images, "task_args['images'] must be populated")
+            self.assertEqual(images, [b"\x89PNG\r\n\x1a\nfake-image-bytes"])
+
+    @patch("trae_agent.cli.resolve_config_file", return_value="test_config.yaml")
+    def test_run_with_nonexistent_image_fails(self, mock_resolve_config_file):
+        """--image pointing at a missing file must exit non-zero."""
+        result = self.runner.invoke(
+            cli, ["run", "some task", "--image", "does-not-exist.png"]
+        )
+        self.assertNotEqual(result.exit_code, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
