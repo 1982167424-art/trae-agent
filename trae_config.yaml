@@ -13,9 +13,9 @@ allow_mcp_servers:
     - playwright
 mcp_servers:
     playwright:
-        command: npx
+        command: node
         args:
-            - "@playwright/mcp@0.0.27"
+            - "/Users/zhang/Desktop/tim/trae-agent/node_modules/@playwright/mcp/cli.js"
 lakeview:
     model: lakeview_model
 
