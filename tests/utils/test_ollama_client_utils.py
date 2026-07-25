@@ -122,5 +122,98 @@ class TestOllamaClient(unittest.TestCase):
         self.assertEqual(ollama_client.supports_tool_calling(model_config), False)
 
 
+class TestOllamaMultimodalParsing(unittest.TestCase):
+    """Pure unit tests for multimodal (vision) message parsing.
+
+    These tests do NOT require a running Ollama server — they only exercise
+    ``parse_messages`` / ``set_chat_history`` and therefore run in CI even
+    when ``SKIP_OLLAMA_TEST=true`` is set (the network-dependent
+    ``TestOllamaClient`` class is the one that gets skipped).
+    """
+
+    def _make_client(self) -> OllamaClient:
+        model_config = ModelConfig(
+            TEST_MODEL,
+            model_provider=ModelProvider(
+                provider="ollama",
+                api_key="ollama",
+                base_url="http://localhost:11434/v1",
+                api_version=None,
+            ),
+            max_tokens=1000,
+            temperature=0.8,
+            top_p=7.0,
+            top_k=8,
+            parallel_tool_calls=False,
+            max_retries=1,
+        )
+        return OllamaClient(model_config)
+
+    def test_parse_messages_forwards_images_for_user(self):
+        """Multimodal user messages must carry the ``images`` field so that
+        local vision-language models (e.g. ``kimi-vl-a3b``) can actually see
+        images."""
+        ollama_client = self._make_client()
+        image_bytes = b"\x89PNG\r\n\x1a\n"  # PNG header bytes, enough for the parser
+        messages = [
+            LLMMessage(role="system", content="You are a vision assistant."),
+            LLMMessage(
+                role="user",
+                content="What is in this image?",
+                images=[image_bytes, "/tmp/fake.png"],
+            ),
+        ]
+        parsed = ollama_client.parse_messages(messages)
+
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0]["role"], "system")
+        self.assertNotIn("images", parsed[0])
+
+        self.assertEqual(parsed[1]["role"], "user")
+        self.assertEqual(parsed[1]["content"], "What is in this image?")
+        self.assertIn("images", parsed[1])
+        self.assertEqual(parsed[1]["images"], [image_bytes, "/tmp/fake.png"])
+
+    def test_parse_messages_omits_images_when_absent(self):
+        """Backward compatibility: a plain text user message must NOT carry an
+        ``images`` key, otherwise some Ollama backends reject the payload."""
+        ollama_client = self._make_client()
+        parsed = ollama_client.parse_messages([LLMMessage(role="user", content="plain text only")])
+        self.assertEqual(parsed[0]["role"], "user")
+        self.assertEqual(parsed[0]["content"], "plain text only")
+        self.assertNotIn("images", parsed[0])
+
+    def test_parse_messages_does_not_attach_images_to_system_or_assistant(self):
+        """Only user messages should carry images; system/assistant messages
+        must remain text-only even if an ``images`` value is supplied."""
+        ollama_client = self._make_client()
+        parsed = ollama_client.parse_messages(
+            [
+                LLMMessage(role="system", content="sys", images=[b"\x89PNG\r\n\x1a\n"]),
+                LLMMessage(role="assistant", content="asst", images=[b"\x89PNG\r\n\x1a\n"]),
+            ]
+        )
+        self.assertEqual(parsed[0]["role"], "system")
+        self.assertNotIn("images", parsed[0])
+        self.assertEqual(parsed[1]["role"], "assistant")
+        self.assertNotIn("images", parsed[1])
+
+    def test_set_chat_history_preserves_images(self):
+        """``set_chat_history`` must round-trip image-bearing messages so that
+        subsequent ``chat()`` calls can forward them to Ollama."""
+        ollama_client = self._make_client()
+        ollama_client.set_chat_history(
+            [
+                LLMMessage(
+                    role="user",
+                    content="describe this",
+                    images=[b"\x89PNG\r\n\x1a\n"],
+                )
+            ]
+        )
+        self.assertEqual(len(ollama_client.message_history), 1)
+        self.assertIn("images", ollama_client.message_history[0])
+
+
 if __name__ == "__main__":
     unittest.main()

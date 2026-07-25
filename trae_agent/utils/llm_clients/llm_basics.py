@@ -9,12 +9,21 @@ from trae_agent.tools.base import ToolCall, ToolResult
 
 @dataclass
 class LLMMessage:
-    """Standard message format."""
+    """Standard message format.
+
+    ``images`` is an optional list of image payloads for multimodal (vision)
+    messages. Each entry may be raw image bytes, a base64-encoded string, or a
+    filesystem path to an image file. Providers that do not support vision
+    input will simply ignore this field. Currently the Ollama client forwards
+    ``images`` to the underlying ``ollama.chat()`` call so that local
+    vision-language models (e.g. ``kimi-vl-a3b``) can receive image input.
+    """
 
     role: str
     content: str | None = None
     tool_call: ToolCall | None = None
     tool_result: ToolResult | None = None
+    images: list[bytes | str] | None = None
 
 
 @dataclass

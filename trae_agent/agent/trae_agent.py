@@ -130,8 +130,7 @@ class TraeAgent(BaseAgent):
                 #   - []    : 显式空列表 → 拒绝所有 server
                 #   - [a,b] : 仅允许列表中的 server
                 if self.allow_mcp_servers is not None and (
-                    not self.allow_mcp_servers
-                    or mcp_server_name not in self.allow_mcp_servers
+                    not self.allow_mcp_servers or mcp_server_name not in self.allow_mcp_servers
                 ):
                     continue
                 mcp_client = MCPClient()
@@ -228,9 +227,7 @@ class TraeAgent(BaseAgent):
                 skills_to_system_message,
             )
 
-            skills = load_all_skills(
-                project_dir=self.project_path if self.project_path else None
-            )
+            skills = load_all_skills(project_dir=self.project_path if self.project_path else None)
             skills_block = skills_to_system_message(skills)
         except Exception:
             # Skills are optional; never fail the agent on a skill error.
@@ -243,9 +240,7 @@ class TraeAgent(BaseAgent):
                 LLMMessage(role="system", content=self.get_system_prompt())
             )
             if skills_block:
-                self._initial_messages.append(
-                    LLMMessage(role="system", content=skills_block)
-                )
+                self._initial_messages.append(LLMMessage(role="system", content=skills_block))
 
             user_message = ""
             if self.docker_config:
@@ -260,7 +255,18 @@ class TraeAgent(BaseAgent):
                     "issue within our repository. Here's the issue text:\n"
                     f"{extra_args['issue']}\n"
                 )
-            self._initial_messages.append(LLMMessage(role="user", content=user_message))
+            # Multimodal input: images passed via CLI --image are forwarded on
+            # the first user message so vision-language models (e.g. kimi-vl-a3b
+            # loaded with its mmproj projector) can actually see them. Providers
+            # whose clients don't read `images` simply ignore the field.
+            images_payload: list[bytes | str] | None = extra_args.get("images") or None
+            self._initial_messages.append(
+                LLMMessage(
+                    role="user",
+                    content=user_message,
+                    images=images_payload,
+                )
+            )
         # else: resume mode — _initial_messages already populated by
         # resume_from_messages(). Do NOT clobber them.
 
