@@ -131,6 +131,12 @@ class OllamaClient(BaseLLMClient):
     def parse_messages(self, messages: list[LLMMessage]) -> list[dict]:
         """
         Ollama parse messages using native Ollama message format.
+
+        Multimodal (vision) user messages are forwarded with an ``images``
+        field so that local vision-language models such as ``kimi-vl-a3b``
+        can actually receive image input. The Ollama Python client accepts
+        raw bytes, base64-encoded strings, or filesystem paths as image
+        payloads.
         """
         ollama_messages: list[dict] = []
         for msg in messages:
@@ -144,7 +150,10 @@ class OllamaClient(BaseLLMClient):
                 if msg.role == "system":
                     ollama_messages.append({"role": "system", "content": msg.content})
                 elif msg.role == "user":
-                    ollama_messages.append({"role": "user", "content": msg.content})
+                    user_msg: dict = {"role": "user", "content": msg.content}
+                    if msg.images:
+                        user_msg["images"] = list(msg.images)
+                    ollama_messages.append(user_msg)
                 elif msg.role == "assistant":
                     ollama_messages.append({"role": "assistant", "content": msg.content})
                 else:
