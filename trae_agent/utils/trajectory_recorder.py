@@ -14,6 +14,7 @@
   P1-13 update_lakeview 遍历 list 找 step,O(n) → 用 dict 索引,O(1)
 """
 
+import base64
 import json
 import logging
 import os
@@ -264,6 +265,15 @@ class TrajectoryRecorder:
             data["tool_call"] = self._serialize_tool_call(message.tool_call)
         if message.tool_result:
             data["tool_result"] = self._serialize_tool_result(message.tool_result)
+        if message.images:
+            # 多模态图片以 base64 字符串持久化,使 resume 时能还原。
+            # bytes 直接编码;str(已是 base64 或路径)原样写入。
+            data["images"] = [
+                base64.b64encode(img).decode("ascii")
+                if isinstance(img, (bytes, bytearray))
+                else str(img)
+                for img in message.images
+            ]
         return data
 
     def _serialize_tool_call(self, tool_call: ToolCall) -> dict[str, Any]:

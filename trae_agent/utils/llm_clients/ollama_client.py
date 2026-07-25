@@ -131,6 +131,11 @@ class OllamaClient(BaseLLMClient):
     def parse_messages(self, messages: list[LLMMessage]) -> list[dict]:
         """
         Ollama parse messages using native Ollama message format.
+
+        多模态(视觉)用户消息会带上 ``images`` 字段透传给底层
+        ``ollama.chat()`` 调用,使本地视觉语言模型(如 ``kimi-vl-a3b`` 配合
+        mmproj projector)能够真正接收到图片输入。Ollama Python client
+        接受原始 bytes、base64 字符串或文件路径作为图片载荷。
         """
         ollama_messages: list[dict] = []
         for msg in messages:
@@ -144,7 +149,10 @@ class OllamaClient(BaseLLMClient):
                 if msg.role == "system":
                     ollama_messages.append({"role": "system", "content": msg.content})
                 elif msg.role == "user":
-                    ollama_messages.append({"role": "user", "content": msg.content})
+                    user_msg: dict = {"role": "user", "content": msg.content}
+                    if msg.images:
+                        user_msg["images"] = list(msg.images)
+                    ollama_messages.append(user_msg)
                 elif msg.role == "assistant":
                     ollama_messages.append({"role": "assistant", "content": msg.content})
                 else:
