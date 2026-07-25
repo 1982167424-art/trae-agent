@@ -9,12 +9,20 @@ from trae_agent.tools.base import ToolCall, ToolResult
 
 @dataclass
 class LLMMessage:
-    """Standard message format."""
+    """Standard message format.
+
+    ``images`` 为多模态(视觉)消息的可选图片载荷列表,每个元素可以是图片
+    原始 bytes、base64 编码字符串或图片文件路径。不支持视觉输入的 provider
+    会忽略该字段。目前 Ollama client 会把 ``images`` 透传给底层
+    ``ollama.chat()`` 调用,使本地视觉语言模型(如 ``kimi-vl-a3b`` 配合
+    mmproj projector)能够接收图片输入。
+    """
 
     role: str
     content: str | None = None
     tool_call: ToolCall | None = None
     tool_result: ToolResult | None = None
+    images: list[bytes | str] | None = None
 
 
 @dataclass

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from dataclasses import dataclass, field
@@ -85,7 +86,32 @@ def _deserialize_message(data: dict[str, Any]) -> LLMMessage:
         content=data.get("content", "") or "",
         tool_call=tool_call,
         tool_result=tool_result,
+        images=_deserialize_images(data.get("images")),
     )
+
+
+def _deserialize_images(raw: Any) -> list[bytes] | None:
+    """Reconstruct the ``images`` payload of an ``LLMMessage`` from serialized form.
+
+    ``TrajectoryRecorder._serialize_message`` writes images as a list of
+    base64-encoded strings (for raw bytes) or plain strings (for paths /
+    pre-encoded base64). We decode base64 strings back into bytes so the
+    Ollama client can forward them verbatim on resume.
+    """
+    if not raw:
+        return None
+    images: list[bytes] = []
+    for item in raw:
+        if isinstance(item, (bytes, bytearray)):
+            images.append(bytes(item))
+            continue
+        s = str(item)
+        try:
+            images.append(base64.b64decode(s, validate=True))
+        except Exception:
+            # 不是合法 base64(可能是文件路径),原样保留为字符串。
+            images.append(s)  # type: ignore[arg-type]
+    return images
 
 
 def load_trajectory(path: str | Path) -> ResumableTrajectory:
