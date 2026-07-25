@@ -14,7 +14,12 @@ from ollama import chat as ollama_chat  # pyright: ignore[reportUnknownVariableT
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
 from trae_agent.utils.llm_clients.base_client import BaseLLMClient
-from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse
+from trae_agent.utils.llm_clients.llm_basics import (
+    LLMMessage,
+    LLMResponse,
+    ImageContent,
+    to_provider_content,
+)
 from trae_agent.utils.llm_clients.retry_utils import retry_with
 
 
@@ -144,9 +149,27 @@ class OllamaClient(BaseLLMClient):
                 if msg.role == "system":
                     ollama_messages.append({"role": "system", "content": msg.content})
                 elif msg.role == "user":
-                    ollama_messages.append({"role": "user", "content": msg.content})
+                    ollama_messages.append(
+                        {
+                            "role": "user",
+                            "content": to_provider_content(
+                                msg.content,
+                                self.model_config.supports_multimodal,
+                                _convert_ollama_content,
+                            ),
+                        }
+                    )
                 elif msg.role == "assistant":
-                    ollama_messages.append({"role": "assistant", "content": msg.content})
+                    ollama_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": to_provider_content(
+                                msg.content,
+                                self.model_config.supports_multimodal,
+                                _convert_ollama_content,
+                            ),
+                        }
+                    )
                 else:
                     raise ValueError(f"Invalid message role: {msg.role}")
         return ollama_messages
@@ -183,3 +206,22 @@ class OllamaClient(BaseLLMClient):
     def _id_generator(self) -> str:
         """Generate a random ID string"""
         return str(uuid.uuid4())
+
+
+def _convert_ollama_content(parts: list) -> list[dict]:
+    """Build an Ollama multimodal ``content`` array.
+
+    Text parts become ``{"type": "text", ...}``; image
+    parts become ``{"type": "image", "image": <base64>}``
+    (or ``{"type": "image_url", ...}`` for a URL).
+    """
+    out: list[dict] = []
+    for p in parts:
+        if isinstance(p, ImageContent):
+            if p.data:
+                out.append({"type": "image", "image": p.data})
+            else:
+                out.append({"type": "image_url", "image_url": {"url": p.url}})
+        else:
+            out.append({"type": "text", "text": p.text})
+    return out

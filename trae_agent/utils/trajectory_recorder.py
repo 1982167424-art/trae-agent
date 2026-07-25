@@ -259,12 +259,50 @@ class TrajectoryRecorder:
     # -------- serialization helpers ------------------------------------------
 
     def _serialize_message(self, message: LLMMessage) -> dict[str, Any]:
-        data: dict[str, Any] = {"role": message.role, "content": message.content}
+        data: dict[str, Any] = {
+            "role": message.role,
+            "content": self._serialize_content(message.content),
+        }
         if message.tool_call:
             data["tool_call"] = self._serialize_tool_call(message.tool_call)
         if message.tool_result:
             data["tool_result"] = self._serialize_tool_result(message.tool_result)
         return data
+
+    @staticmethod
+    def _serialize_content(content: Any) -> Any:
+        """Serialize message content for the trajectory file.
+
+        Multimodal content lists may carry base64 image data that would bloat
+        the trajectory JSON to many MB. Keep the text parts, but replace each
+        image part with a small redaction placeholder.
+        """
+        if not isinstance(content, list):
+            return content
+        parts: list[Any] = []
+        for part in content:
+            part_type = getattr(part, "type", None)
+            if part_type is None and isinstance(part, dict):
+                part_type = part.get("type")
+            if part_type in ("image", "image_url"):
+                media_type = getattr(part, "media_type", None)
+                if media_type is None and isinstance(part, dict):
+                    media_type = part.get("media_type")
+                parts.append(
+                    {
+                        "type": "image",
+                        "media_type": media_type,
+                        "data": "[image data redacted from trajectory]",
+                    }
+                )
+            elif part_type == "text" or hasattr(part, "text"):
+                text = getattr(part, "text", None)
+                if text is None and isinstance(part, dict):
+                    text = part.get("text")
+                parts.append({"type": "text", "text": text})
+            else:
+                parts.append(str(part))
+        return parts
 
     def _serialize_tool_call(self, tool_call: ToolCall) -> dict[str, Any]:
         return {

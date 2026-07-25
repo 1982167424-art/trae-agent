@@ -36,6 +36,17 @@ logger = logging.getLogger(__name__)
 # Must start with a letter, end with letter or digit. 1-64 chars.
 _SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}[a-z0-9]$")
 
+# Default set of known built-in tool names (used for tools validation).
+# MCP tools are dynamic and cannot be enumerated here.
+_DEFAULT_KNOWN_TOOLS: frozenset[str] = frozenset({
+    "bash",
+    "str_replace_based_edit_tool",
+    "sequentialthinking",
+    "task_done",
+    "json_edit_tool",
+    "ckg",
+})
+
 
 @dataclass
 class Skill:
@@ -144,7 +155,10 @@ def load_skill_file(path: Path) -> Skill | None:
     return skill
 
 
-def validate_skill(path: Path) -> Skill:
+def validate_skill(
+    path: Path,
+    known_tool_names: set[str] | frozenset[str] | None = None,
+) -> Skill:
     """Load and *strictly* validate a skill file. Raises on any error.
 
     Validation rules:
@@ -153,8 +167,11 @@ def validate_skill(path: Path) -> Skill:
       - ``description`` must be present and non-empty (max 500 chars).
       - Body content must be non-empty (no description-only skills).
       - ``tools`` (optional) must be a list of strings, each matching
-        a registered tool name when ``known_tool_names`` is provided.
+        a known tool name when ``known_tool_names`` is provided (defaults
+        to ``_DEFAULT_KNOWN_TOOLS``).
     """
+    if known_tool_names is None:
+        known_tool_names = _DEFAULT_KNOWN_TOOLS
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
@@ -204,6 +221,11 @@ def validate_skill(path: Path) -> Skill:
             if not isinstance(t, str):
                 raise SkillValidationError(
                     f"`tools` entries must be strings, found {type(t).__name__}"
+                )
+            if known_tool_names and t not in known_tool_names:
+                raise SkillValidationError(
+                    f"unknown tool {t!r} in `tools` list; "
+                    f"known tools: {', '.join(sorted(known_tool_names))}"
                 )
 
     return Skill(
