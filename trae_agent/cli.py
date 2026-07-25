@@ -143,6 +143,18 @@ def cli():
 @click.option("--working-dir", "-w", help="Working directory for the agent")
 @click.option("--must-patch", "-mp", is_flag=True, help="Whether to patch the code")
 @click.option(
+    "--image",
+    "-i",
+    "image_paths",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+    help=(
+        "Path to an image file to send to a vision-language model (e.g. "
+        "kimi-vl-a3b). Repeatable: --image a.png --image b.png. Only "
+        "providers that accept image input (currently Ollama) will use it."
+    ),
+)
+@click.option(
     "--config-file",
     help="Path to configuration file",
     default="trae_config.yaml",
@@ -209,6 +221,7 @@ def run(
     max_steps: int | None = None,
     working_dir: str | None = None,
     must_patch: bool = False,
+    image_paths: tuple[str, ...] = (),
     config_file: str = "trae_config.yaml",
     trajectory_file: str | None = None,
     console_type: str | None = "simple",
@@ -386,11 +399,24 @@ def run(
         pass
 
     try:
+        # Read image files into bytes for multimodal (vision) models.
+        # Ollama accepts raw bytes; other providers ignore the field.
+        image_bytes: list[bytes] = []
+        for img_path in image_paths:
+            try:
+                image_bytes.append(Path(img_path).read_bytes())
+            except OSError as e:
+                console.print(f"[red]Error reading image {img_path}: {e}[/red]")
+                sys.exit(1)
+        if image_bytes:
+            console.print(f"[blue]Loaded {len(image_bytes)} image(s) for vision input.[/blue]")
+
         task_args = {
             "project_path": working_dir,
             "issue": task,
             "must_patch": "true" if must_patch else "false",
             "patch_path": patch_path,
+            "images": image_bytes,
         }
 
         # Set up agent context for rich console if applicable
@@ -961,13 +987,10 @@ def resume(
 
     # ----- Resolve config + effective provider/model -----
     config_file = resolve_config_file(config_file)
-    config: Config = (
-        Config.create(config_file=config_file)
-        .resolve_config_values(
-            provider=provider or traj.provider or None,
-            model=model or traj.model or None,
-            max_steps=max_steps,
-        )
+    config: Config = Config.create(config_file=config_file).resolve_config_values(
+        provider=provider or traj.provider or None,
+        model=model or traj.model or None,
+        max_steps=max_steps,
     )
 
     eff_provider = config.trae_agent.model.model_provider.provider
@@ -998,9 +1021,7 @@ def resume(
         out_path = Path(trajectory_file_output).expanduser().resolve()
     else:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = traj.trajectory_path.with_name(
-            f"{traj.trajectory_path.stem}_resumed_{ts}.json"
-        )
+        out_path = traj.trajectory_path.with_name(f"{traj.trajectory_path.stem}_resumed_{ts}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     agent.set_trajectory_file(str(out_path))
 

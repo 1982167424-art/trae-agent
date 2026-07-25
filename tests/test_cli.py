@@ -176,6 +176,85 @@ class TestCli(unittest.TestCase):
             args, _ = mock_agent.run.call_args
             self.assertEqual(args[0], "task.txt")
 
+    @patch("trae_agent.cli.resolve_config_file", return_value="test_config.yaml")
+    @patch("trae_agent.cli.Agent")
+    @patch("trae_agent.cli.asyncio.run")
+    @patch("trae_agent.cli.Config.create")
+    @patch("trae_agent.cli.ConsoleFactory.create_console")
+    def test_run_with_image_flag_forwards_bytes(
+        self,
+        mock_create_console,
+        mock_config_create,
+        mock_asyncio_run,
+        mock_agent_class,
+        mock_resolve_config_file,
+    ):
+        """`--image` should read the file as bytes and pass it via task_args."""
+        mock_config = MagicMock()
+        mock_config.trae_agent = MagicMock()
+        mock_config_create.return_value.resolve_config_values.return_value = mock_config
+        mock_agent = MagicMock()
+        mock_agent_class.return_value = mock_agent
+        mock_console = MagicMock()
+        mock_console.set_initial_task = MagicMock()
+        mock_console.set_agent_context = MagicMock()
+        mock_create_console.return_value = mock_console
+
+        png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+        with self.runner.isolated_filesystem():
+            with open("photo.png", "wb") as f:
+                f.write(png_bytes)
+
+            result = self.runner.invoke(
+                cli,
+                ["run", "describe this image", "--image", "photo.png", "--working-dir", "/tmp"],
+            )
+            self.assertEqual(result.exit_code, 0)
+
+            mock_agent.run.assert_called_once()
+            args, _ = mock_agent.run.call_args
+            task_args = args[1]
+            self.assertEqual(task_args["images"], [png_bytes])
+
+    @patch("trae_agent.cli.resolve_config_file", return_value="test_config.yaml")
+    def test_run_with_nonexistent_image_errors(self, mock_resolve_config_file):
+        """`--image` pointing at a missing file should fail fast (click.Path(exists=True))."""
+        result = self.runner.invoke(cli, ["run", "task", "--image", "does-not-exist.png"])
+        self.assertNotEqual(result.exit_code, 0)
+        # click's exists validation message includes the path
+        self.assertIn("does-not-exist.png", result.output)
+
+    @patch("trae_agent.cli.resolve_config_file", return_value="test_config.yaml")
+    @patch("trae_agent.cli.Agent")
+    @patch("trae_agent.cli.asyncio.run")
+    @patch("trae_agent.cli.Config.create")
+    @patch("trae_agent.cli.ConsoleFactory.create_console")
+    def test_run_without_image_flag_passes_empty_list(
+        self,
+        mock_create_console,
+        mock_config_create,
+        mock_asyncio_run,
+        mock_agent_class,
+        mock_resolve_config_file,
+    ):
+        """Backward compat: no --image → task_args['images'] is an empty list."""
+        mock_config = MagicMock()
+        mock_config.trae_agent = MagicMock()
+        mock_config_create.return_value.resolve_config_values.return_value = mock_config
+        mock_agent = MagicMock()
+        mock_agent_class.return_value = mock_agent
+        mock_console = MagicMock()
+        mock_console.set_initial_task = MagicMock()
+        mock_console.set_agent_context = MagicMock()
+        mock_create_console.return_value = mock_console
+
+        result = self.runner.invoke(cli, ["run", "plain text task", "--working-dir", "/tmp"])
+        self.assertEqual(result.exit_code, 0)
+
+        args, _ = mock_agent.run.call_args
+        self.assertEqual(args[1]["images"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
