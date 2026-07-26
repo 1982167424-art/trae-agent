@@ -3,7 +3,7 @@
 
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from trae_agent.tools.base import ToolCallArguments
 from trae_agent.tools.edit_tool import TextEditorTool

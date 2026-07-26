@@ -190,10 +190,7 @@ def get_output_dir(
         return project_dir
 
     # Auto-detect from working_dir
-    if working_dir:
-        name = Path(working_dir).name
-    else:
-        name = Path.cwd().name
+    name = Path(working_dir).name if working_dir else Path.cwd().name
 
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
     safe_name = safe_name.strip("_") or "default"

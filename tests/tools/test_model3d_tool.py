@@ -1,12 +1,9 @@
 # Copyright (c) 2025 ByteDance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
-import asyncio
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from trae_agent.tools.model3d_tool import Model3DTool, ToolError
 

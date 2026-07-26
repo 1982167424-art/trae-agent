@@ -57,7 +57,10 @@ class TestImageGenToolExecute(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, "img.png")
             with patch("urllib.request.urlretrieve") as mocked:
-                mocked.side_effect = lambda url, path: open(path, "wb").write(fake_png)
+                def _write_fake(url: str, path: str) -> None:
+                    with open(path, "wb") as fh:
+                        fh.write(fake_png)
+                mocked.side_effect = _write_fake
                 res = await tool.execute({"prompt": "a cat", "output_path": out})
             self.assertIsNone(res.error, msg=res.error)
             self.assertTrue(os.path.exists(out))
