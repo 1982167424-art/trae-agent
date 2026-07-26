@@ -5,7 +5,6 @@
 
 import json
 from abc import ABC, abstractmethod
-from typing_extensions import override
 
 import openai
 from openai.types.chat import (
@@ -23,6 +22,7 @@ from openai.types.chat.chat_completion_tool_message_param import (
     ChatCompletionToolMessageParam,
 )
 from openai.types.shared_params.function_definition import FunctionDefinition
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall
 from trae_agent.utils.config import ModelConfig
@@ -274,6 +274,14 @@ def _msg_tool_result_handler(messages: list[ChatCompletionMessageParam], msg: LL
                 tool_call_id=msg.tool_result.call_id,
             )
         )
+        # #4 修复:tool_result 消息可能同时带 content(reflection 折叠进来)。
+        # 在 chat/completions 协议里 tool 与 user 是不同 role,content 不会
+        # 随 tool 消息发送,必须单独补一条 user 文本消息,
+        # 否则工具失败后的纠错反馈对模型不可见。
+        if msg.content:
+            messages.append(
+                ChatCompletionUserMessageParam(content=msg.content, role="user")
+            )
 
 
 def _msg_role_handler(messages: list[ChatCompletionMessageParam], msg: LLMMessage) -> None:

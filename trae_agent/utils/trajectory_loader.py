@@ -42,6 +42,9 @@ class ResumableTrajectory:
     # Tool calls and results already executed — useful for debugging.
     tool_calls_made: int = 0
     tool_results_recorded: int = 0
+    # 原始 run 是否使用了 --must-patch,供 resume 恢复时回读(#7 修复)。
+    # 放在所有无默认值字段之后,满足 dataclass 字段顺序约束。
+    must_patch: str = ""
 
 
 class TrajectoryLoadError(Exception):
@@ -118,8 +121,12 @@ def load_trajectory(path: str | Path) -> ResumableTrajectory:
         )
 
     if raw.get("success") is True:
-        raise TrajectoryLoadError(
-            f"Trajectory at {p.name} is already marked successful; nothing to resume."
+        # #15 修复:原实现对已 success=true 的轨迹直接拒绝 resume,
+        # 导致无法对已完成任务做二次加工/复盘。改为允许继续(打 warning),
+        # 由调用方决定是否继续。
+        logger.warning(
+            f"Trajectory at {p.name} is already marked successful; "
+            f"resuming anyway for re-processing."
         )
 
     # Recover the LLM-visible message history at the point of interruption.
@@ -165,6 +172,7 @@ def load_trajectory(path: str | Path) -> ResumableTrajectory:
         provider=raw.get("provider", ""),
         model=raw.get("model", ""),
         success=bool(raw.get("success", False)),
+        must_patch=raw.get("must_patch", "false"),
         last_result=raw.get("final_result"),
         completed_step_count=len(completed_steps),
         last_input_messages=last_input_messages,

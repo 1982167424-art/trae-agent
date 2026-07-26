@@ -4,6 +4,7 @@
 """Command Line Interface for Trae Agent."""
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+import trae_agent
 from trae_agent.agent import Agent
 from trae_agent.utils.cli import CLIConsole, ConsoleFactory, ConsoleMode, ConsoleType
 from trae_agent.utils.config import Config, TraeAgentConfig
@@ -92,7 +94,7 @@ def build_with_pyinstaller():
 
     # P1 修复:原实现用 os.system("rm -rf ...") / mkdir / cp,在 Windows 上
     # 直接不可用,且跨平台行为不一致。改用 shutil,且用 Path 处理目录。
-    dist_dir = Path("trae_agent/dist")
+    dist_dir = Path(trae_agent.__file__).parent / "dist"
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
     print("--- Building edit_tool ---")
@@ -303,7 +305,11 @@ def run(
         else:
             print(f"Docker is configured incorrectly. {check_msg['error']}")
             sys.exit(1)
-        if not (os.path.exists("trae_agent/dist") and os.path.exists("trae_agent/dist/_internal")):
+        _pkg_dir = os.path.dirname(trae_agent.__file__)
+        if not (
+            os.path.exists(os.path.join(_pkg_dir, "dist"))
+            and os.path.exists(os.path.join(_pkg_dir, "dist", "_internal"))
+        ):
             print("Building tools of Docker mode for the first use, waiting for a few seconds...")
             build_with_pyinstaller()
             print("Building finished.")
@@ -326,7 +332,11 @@ def run(
         sys.exit(1)
 
     # --- Output directory setup ---
-    from trae_agent.utils.output_manager import set_output_dir_override, set_current_project, new_conversation
+    from trae_agent.utils.output_manager import (
+        new_conversation,
+        set_current_project,
+        set_output_dir_override,
+    )
     if output_dir:
         set_output_dir_override(output_dir)
         console.print(f"[blue]Output directory: {output_dir}[/blue]")
@@ -344,10 +354,6 @@ def run(
         api_key=api_key,
         max_steps=max_steps,
     )
-
-    if not agent_type:
-        console.print("[red]Error: agent_type is required.[/red]")
-        sys.exit(1)
 
     # Create CLI Console
     console_mode = ConsoleMode.RUN
@@ -368,9 +374,6 @@ def run(
 
     # agent = Agent(agent_type, config, trajectory_file, cli_console)
 
-    if docker_config is not None:
-        docker_config["workspace_dir"] = working_dir  # now type-safe
-
     # Change working directory if specified
     if working_dir:
         try:
@@ -386,6 +389,12 @@ def run(
         working_dir = os.getcwd()
         console.print(f"[blue]Using current directory as working directory: {working_dir}[/blue]")
 
+    # P1 修复:必须在 working_dir 解析为绝对路径后再赋给 docker 配置,
+    # 否则用户只传 --docker-image 而没传 --working-dir 时 workspace_dir 会是 None,
+    # 导致 DockerManager 初始化崩溃。
+    if docker_config is not None:
+        docker_config["workspace_dir"] = working_dir
+
     # working_dir 已被 os.path.abspath() 或 os.getcwd() 确保为绝对路径,
     # 不再需要 is_absolute 校验(死代码)。
 
@@ -397,6 +406,14 @@ def run(
         docker_config=docker_config,
         docker_keep=docker_keep,
     )
+
+    # P1-bugfix(#7): 把 must_patch 持久化进轨迹,供 `trae resume` 恢复时回读,
+    # 避免恢复运行丢失原始 --must-patch 状态。start_recording 的 update 不会
+    # 清掉这个键。
+    if agent.trajectory_recorder is not None:
+        agent.trajectory_recorder.trajectory_data["must_patch"] = (
+            "true" if must_patch else "false"
+        )
 
     if not docker_config:
         try:
@@ -663,10 +680,6 @@ def interactive(
         mode=console_mode,
     )
 
-    if not agent_type:
-        console.print("[red]Error: agent_type is required.[/red]")
-        sys.exit(1)
-
     # Create agent
     agent = Agent(agent_type, config, trajectory_file, cli_console)
 
@@ -902,7 +915,8 @@ def tools():
 @cli.command()
 def version():
     """Show trae-agent version and exit."""
-    from importlib.metadata import version as _v, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _v
 
     try:
         v = _v("trae-agent")
@@ -1064,7 +1078,7 @@ def resume(
     task_args = {
         "project_path": os.getcwd(),
         "issue": traj.task,
-        "must_patch": "false",
+        "must_patch": traj.must_patch or "false",
     }
     try:
         execution = asyncio.run(agent.run(traj.task, task_args))
@@ -1168,7 +1182,7 @@ def skills_open_dir():
         _ = subprocess.Popen(["open", str(p)])
     elif sys.platform.startswith("linux"):
         _ = subprocess.Popen(["xdg-open", str(p)])
-    elif os.name == "nt":
+    elif sys.platform == "win32":
         _ = subprocess.Popen(["explorer", str(p)])
 
 
@@ -1213,7 +1227,7 @@ def trajectory_export(trajectory_file: str, fmt: str, output: str | None):
         console.print(f"[red]Cannot parse trajectory: {e}[/red]")
         sys.exit(1)
 
-    console.print(f"[green]✓ Exported trajectory[/green]")
+    console.print("[green]✓ Exported trajectory[/green]")
     console.print(f"  source: {src}")
     console.print(f"  output: {written}  ({fmt.upper()})")
 
@@ -1264,7 +1278,7 @@ def project_list():
 @click.argument("name")
 def project_use(name: str):
     """Switch to an existing project."""
-    from trae_agent.utils.output_manager import set_current_project, get_project_dir
+    from trae_agent.utils.output_manager import get_project_dir, set_current_project
     project_dir = get_project_dir(name)
     if project_dir is None:
         console.print(f"[red]Project '{name}' not found. Create it with: trae-cli project new {name}[/red]")
@@ -1278,7 +1292,7 @@ def project_use(name: str):
 @click.argument("name", required=False)
 def project_open(name: str | None):
     """Open project folder in Finder."""
-    from trae_agent.utils.output_manager import get_project_dir, _current_project
+    from trae_agent.utils.output_manager import _current_project, get_project_dir
     target = name or _current_project
     if not target:
         console.print("[red]No project specified. Use: trae-cli project open <name>[/red]")
@@ -1291,7 +1305,7 @@ def project_open(name: str | None):
         subprocess.Popen(["open", str(project_dir)])
     elif sys.platform.startswith("linux"):
         subprocess.Popen(["xdg-open", str(project_dir)])
-    elif os.name == "nt":
+    elif sys.platform == "win32":
         subprocess.Popen(["explorer", str(project_dir)])
     console.print(f"Opened: {project_dir}")
 

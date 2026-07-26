@@ -7,11 +7,12 @@ import asyncio
 import contextlib
 import os
 import subprocess
+
 from typing_extensions import override
 
 from trae_agent.agent.agent_basics import AgentError, AgentExecution
 from trae_agent.agent.base_agent import BaseAgent
-from trae_agent.prompt.agent_prompt import TRAE_AGENT_SYSTEM_PROMPT, MULTIMODAL_PROMPT
+from trae_agent.prompt.agent_prompt import MULTIMODAL_PROMPT, TRAE_AGENT_SYSTEM_PROMPT
 from trae_agent.tools import tools_registry
 from trae_agent.tools.base import Tool, ToolResult
 from trae_agent.utils.config import MCPServerConfig, TraeAgentConfig
@@ -203,10 +204,13 @@ class TraeAgent(BaseAgent):
 
                     self._tools.append(ReadOnlyBashTool(model_provider=provider))
                 else:
-                    # 传入 working_dir 让 edit 工具做越权防护(只允许落在 project 内)。
-                    # 仅 edit 工具接受该参数,其余工具(BashTool 等)不接受,需区分。
+                    # 传入 working_dir 让 edit / 生成类工具做越权防护
+                    # (只允许落在 project 内,阻止模型把产物写到 /etc 等位置)。
                     wd = extra_args.get("project_path") if extra_args else None
                     if t == "str_replace_based_edit_tool":
+                        tool = tools_registry[t](model_provider=provider, working_dir=wd)
+                    elif t in ("video_gen", "model3d", "image_gen"):
+                        # #6 修复:生成类工具同样需要 working_dir 做 output_path 沙箱。
                         tool = tools_registry[t](model_provider=provider, working_dir=wd)
                     else:
                         tool = tools_registry[t](model_provider=provider)

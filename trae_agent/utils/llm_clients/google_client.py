@@ -4,12 +4,13 @@
 """Google Gemini API client wrapper with tool integration."""
 
 import json
+import os
 import traceback
 import uuid
-from typing_extensions import override
 
 from google import genai
 from google.genai import types
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
@@ -24,7 +25,18 @@ class GoogleClient(BaseLLMClient):
     def __init__(self, model_config: ModelConfig):
         super().__init__(model_config)
 
-        self.client = genai.Client(api_key=self.api_key)
+        # Config may leave api_key empty; fall back to the GOOGLE_API_KEY
+        # environment variable (consistent with other providers' resolve_config_values).
+        api_key = self.api_key
+        if not api_key:
+            api_key = os.environ.get("GOOGLE_API_KEY", "")
+        if not api_key:
+            raise ValueError(
+                "Google API key is required: set GOOGLE_API_KEY or provide api_key in config."
+            )
+
+        self.api_key = api_key
+        self.client = genai.Client(api_key=api_key)
         self.message_history: list[types.Content] = []
         self.system_instruction: str | None = None
 
@@ -67,12 +79,15 @@ class GoogleClient(BaseLLMClient):
         generation_config = types.GenerateContentConfig(
             temperature=model_config.temperature,
             top_p=model_config.top_p,
-            top_k=model_config.top_k,
             max_output_tokens=model_config.max_tokens,
             candidate_count=model_config.candidate_count,
             stop_sequences=model_config.stop_sequences,
             system_instruction=current_system_instruction,
         )
+        # #14 修复:Google GenAI 不接受 top_k=0(要求 >= 1),未配置时留给 SDK 用
+        # 默认值,与 anthropic_client 对 top_k<=0 跳过的处理保持一致。
+        if model_config.top_k and model_config.top_k > 0:
+            generation_config.top_k = model_config.top_k
 
         # Add tools if provided
         if tools:

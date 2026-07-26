@@ -202,3 +202,9 @@ models/**/.cache/
 
 # Stray nested clones
 /trae-agent/
+
+# Local env / secrets / generated artifacts (do NOT commit)
+.env.local
+.DS_Store
+draw_orange_cat.py
+test_chinese.txt

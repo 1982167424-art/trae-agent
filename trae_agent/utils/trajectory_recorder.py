@@ -59,6 +59,7 @@ class TrajectoryRecorder:
             "end_time": "",
             "provider": "",
             "model": "",
+            "must_patch": "",
             "max_steps": 0,
             "llm_interactions": [],
             "agent_steps": [],
@@ -149,7 +150,7 @@ class TrajectoryRecorder:
             "timestamp": datetime.now().isoformat(),
             "state": state,
             "llm_messages": [self._serialize_message(msg) for msg in llm_messages]
-            if llm_messages
+            if llm_messages is not None
             else None,
             "llm_response": {
                 "content": llm_response.content,
@@ -220,6 +221,15 @@ class TrajectoryRecorder:
         """
         if self._pending_future is not None and not self._pending_future.done():
             return  # 已有待写入的快照,跳过本次
+        if self._pending_future is not None:
+            # #8 修复:上一次异步写盘已完成(可能带异常)——取一次结果把异常从
+            # future 上清理掉并记录日志,避免磁盘满等错误被静默吞掉,也不让旧
+            # 异常残留在 _pending_future 上影响后续判断。
+            try:
+                self._pending_future.result(timeout=0)
+            except Exception as e:
+                logger.warning("Previous async trajectory save failed: %s", e)
+            self._pending_future = None
         snapshot = self._snapshot()
         path = self.trajectory_path
         self._pending_future = _write_pool.submit(self._do_write, snapshot, path)

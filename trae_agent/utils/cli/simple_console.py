@@ -4,12 +4,13 @@
 """Simple CLI Console implementation."""
 
 import asyncio
-from typing_extensions import override
+import os
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from typing_extensions import override
 
 from trae_agent.agent.agent_basics import AgentExecution, AgentState, AgentStep, AgentStepState
 from trae_agent.utils.cli.cli_console import (
@@ -203,15 +204,21 @@ class SimpleCLIConsole(CLIConsole):
 
     @override
     def get_working_dir_input(self) -> str:
-        """Get working directory input from user (for interactive mode)."""
+        """Get working directory input from user (for interactive mode).
+
+        Returns the current working directory when the user provides no
+        input (Enter) or the prompt is interrupted, so interactive tasks
+        default to CWD — consistent with the rich console behaviour.
+        """
         if self.mode != ConsoleMode.INTERACTIVE:
             return ""
 
         self.console.print("[bold blue]Working Directory:[/bold blue] ", end="")
         try:
-            return input()
+            raw = input().strip()
         except (EOFError, KeyboardInterrupt):
-            return ""
+            return os.getcwd()
+        return raw or os.getcwd()
 
     @override
     def stop(self):

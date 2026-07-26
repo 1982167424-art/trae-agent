@@ -145,7 +145,9 @@ class DockerToolExecutor:
                         f"The 'command' argument for {tool_call.name} must be a string."
                     )
                 executable_path = f"{self._docker_manager.CONTAINER_TOOLS_PATH}/edit_tool"
-                cmd_parts = [executable_path, sub_command]
+                # #8 修复:sub_command 是 LLM 给的任意字符串,原实现直接拼进
+                # shell 命令(未 shlex.quote),存在命令注入。这里统一加引号。
+                cmd_parts = [executable_path, shlex.quote(sub_command)]
 
                 for key, value in processed_args.items():
                     if key == "command" or value is None:

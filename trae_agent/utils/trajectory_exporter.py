@@ -126,7 +126,8 @@ def render_markdown(traj_data: dict[str, Any]) -> str:
 def render_html(traj_data: dict[str, Any]) -> str:
     """Render a trajectory dict as a self-contained HTML page."""
     md = render_markdown(traj_data)
-    body = md.replace("```", "<pre><code>").replace("\n", "</code></pre>\n", 1)
+    # #14 修复:原 `body` 是未完成的 markdown→HTML 半成品变量,
+    # 从未被使用(HTML 导出直接转义展示 md)。删除死变量。
     return (
         "<!doctype html>\n"
         "<html lang=\"en\"><head>\n"

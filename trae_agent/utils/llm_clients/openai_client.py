@@ -4,7 +4,6 @@
 """OpenAI API client wrapper with tool integration."""
 
 import json
-from typing_extensions import override
 
 import openai
 from openai.types.responses import (
@@ -16,6 +15,7 @@ from openai.types.responses import (
     ToolParam,
 )
 from openai.types.responses.response_input_param import FunctionCallOutput
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
@@ -56,7 +56,9 @@ class OpenAIClient(BaseLLMClient):
             else openai.NOT_GIVEN,
             # top_p 未配置(None)时不能传给 SDK,否则 Invalid value。未设置走 NOT_GIVEN。
             top_p=model_config.top_p if model_config.top_p is not None else openai.NOT_GIVEN,
-            max_output_tokens=model_config.max_tokens,
+            # #13 修复:max_tokens 可能为 None(未在 config 设置),
+            # 直接传给 Responses API 会被拒。改用带默认值的 getter(缺省 4096)。
+            max_output_tokens=model_config.get_max_tokens_param(),
         )
 
     @override
@@ -183,6 +185,11 @@ class OpenAIClient(BaseLLMClient):
         for msg in messages:
             if msg.tool_result:
                 openai_messages.append(self.parse_tool_call_result(msg.tool_result))
+                # #9 修复:tool_result 消息带 content 时,补一条 user 文本消息,
+                # 与 tool 消息分开发送(OpenAI 里 tool 是独立 role,不会造成
+                # 连续 user)。
+                if msg.content:
+                    openai_messages.append({"role": "user", "content": msg.content})
             elif msg.tool_call:
                 openai_messages.append(self.parse_tool_call(msg.tool_call))
             else:
@@ -238,10 +245,8 @@ class OpenAIClient(BaseLLMClient):
         for msg in messages:
             if isinstance(msg, dict) and msg.get("type") == "function_call_output":
                 output_call_ids.add(msg.get("call_id", ""))
-            elif hasattr(msg, "call_id") and hasattr(msg, "type"):
-                # FunctionCallOutput object
-                if msg.type == "function_call_output":
-                    output_call_ids.add(msg.call_id)
+            elif hasattr(msg, "call_id") and hasattr(msg, "type") and msg.type == "function_call_output":
+                output_call_ids.add(msg.call_id)
 
         sanitized: ResponseInputParam = []
         for msg in messages:
@@ -250,9 +255,8 @@ class OpenAIClient(BaseLLMClient):
             if isinstance(msg, dict) and msg.get("type") == "function_call":
                 if msg.get("call_id") not in output_call_ids:
                     is_orphaned = True
-            elif hasattr(msg, "type") and msg.type == "function_call":
-                if not hasattr(msg, "call_id") or msg.call_id not in output_call_ids:
-                    is_orphaned = True
+            elif hasattr(msg, "type") and msg.type == "function_call" and (not hasattr(msg, "call_id") or msg.call_id not in output_call_ids):
+                is_orphaned = True
 
             if not is_orphaned:
                 sanitized.append(msg)

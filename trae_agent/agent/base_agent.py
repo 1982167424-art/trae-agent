@@ -286,8 +286,16 @@ class BaseAgent(ABC):
         # Display thinking state
         step.state = AgentStepState.THINKING
         self._update_cli_console(step, execution)
-        # Get LLM response
-        llm_response = self._llm_client.chat(messages, self._model_config, self._tools)
+        # Get LLM response.
+        # Pass reuse_history=False: the agent maintains the full message
+        # history itself (see execute_task's `_accumulated_messages`), so each
+        # client must treat the incoming `messages` as the complete history
+        # rather than appending to its own. Without this, OpenAI-compatible
+        # clients accumulate `message_history += parsed_messages` and double
+        # the conversation (duplicate system prompt, misplaced tool messages).
+        llm_response = self._llm_client.chat(
+            messages, self._model_config, self._tools, reuse_history=False
+        )
         step.llm_response = llm_response
 
         # Display step with LLM response
@@ -296,18 +304,36 @@ class BaseAgent(ABC):
         # Update token usage
         self._update_llm_usage(llm_response, execution)
 
+        # P1-修复:把 assistant 回合(含 tool_call)写回历史。
+        # 之前这里只把 tool_result/reflection 拼进消息,从不追加 assistant
+        # 回合,导致第 2 步起消息缺 assistant → Anthropic 拒(连续 user)、
+        # OpenAI orphan tool output 被拒、Google/Ollama 对话不交替。几乎所有
+        # ≥2 次工具调用的任务都会在第 2 步崩。
+        # 注意:LLMMessage 仅支持单个 tool_call,多个并行 tool_call 时只记录
+        # 第一个(与 _tool_call_handler 逐条 tool_result 的表示一致,这是
+        # LLMMessage 的既有设计限制,不在本次修复范围)。
+        assistant_message = LLMMessage(
+            role="assistant",
+            content=llm_response.content or None,
+            tool_call=llm_response.tool_calls[0] if llm_response.tool_calls else None,
+        )
+
         if self.llm_indicates_task_completed(llm_response):
             if self._is_task_completed(llm_response):
                 execution.agent_state = AgentState.COMPLETED
                 execution.final_result = llm_response.content
                 execution.success = True
-                return []
+                return [assistant_message]
             else:
                 execution.agent_state = AgentState.RUNNING
-                return [LLMMessage(role="user", content=self.task_incomplete_message())]
+                return [
+                    assistant_message,
+                    LLMMessage(role="user", content=self.task_incomplete_message()),
+                ]
         else:
             tool_calls = llm_response.tool_calls
-            return await self._tool_call_handler(tool_calls, step)
+            tool_messages = await self._tool_call_handler(tool_calls, step)
+            return [assistant_message] + tool_messages
 
     async def _finalize_step(
         self, step: "AgentStep", messages: list["LLMMessage"], execution: "AgentExecution"
@@ -430,6 +456,15 @@ class BaseAgent(ABC):
             # P1-15 修复:reflection 是"工具失败 → 用户视角反馈",
             # 语义是 role="user"(让模型知道 tool output 不行),而不是
             # role="assistant"(否则破坏 user/assistant 交替,部分 provider 会拒绝)。
-            messages.append(LLMMessage(role="user", content=reflection))
+            # #9 修复:若上一条消息已是 role="user"(通常是 tool_result),
+            # 把 reflection 折叠进该消息的 content,而不是新增一条 user 消息,
+            # 否则会出现连续两条 user 消息,Anthropic 等 provider 会直接拒绝请求。
+            # 客户端在 tool_result 消息同时带 content 时会作为同一用户回合里的
+            # 文本块一并发送(见 openai/anthropic client 的 parse_messages)。
+            if messages and messages[-1].role == "user":
+                prev = messages[-1]
+                prev.content = (prev.content or "") + "\n\n" + reflection
+            else:
+                messages.append(LLMMessage(role="user", content=reflection))
 
         return messages
