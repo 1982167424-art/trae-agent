@@ -305,11 +305,11 @@ class TestGoogleClient(unittest.TestCase):
             top_k=8,
             parallel_tool_calls=False,
             max_retries=1,
-            base_url=None,
         )
         google_client = GoogleClient(model_config)
         self.assertEqual(google_client.supports_tool_calling(model_config), True)
-        model_config.model = "no such model"
+        # Base implementation returns the config flag; toggling it flips the result.
+        model_config.supports_tool_calling = False
         self.assertEqual(google_client.supports_tool_calling(model_config), False)
 
 

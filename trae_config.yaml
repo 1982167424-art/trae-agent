@@ -10,6 +10,7 @@ agents:
             - task_done
             - image_gen
             - video_gen
+            - model3d
 allow_mcp_servers:
     - playwright
 mcp_servers:
@@ -96,20 +97,23 @@ models:
         top_k: 0
         max_retries: 10
         parallel_tool_calls: true
-    doubao_stream_4:
+    # ===== 火山方舟在线推理: 第三方文本推理模型 =====
+    deepseek:
         model_provider: doubao
         model: ep-20260725204908-cns4q
-        supports_multimodal: true
+        # DeepSeek (文本推理模型, 非多模态)
+        supports_multimodal: false
         max_tokens: 8192
-        temperature: 0.5
+        temperature: 0.6
         top_p: 0.95
         top_k: 0
         max_retries: 10
-        parallel_tool_calls: true
-    doubao_stream_5:
+        parallel_tool_calls: false
+    glm:
         model_provider: doubao
         model: ep-20260725205008-plpsp
-        supports_multimodal: true
+        # GLM (文本推理模型, 非多模态)
+        supports_multimodal: false
         max_tokens: 8192
         temperature: 0.5
         top_p: 0.95
@@ -126,16 +130,8 @@ models:
         top_k: 0
         max_retries: 10
         parallel_tool_calls: true
-    doubao_stream_7:
-        model_provider: doubao
-        model: ep-20260725205234-k8bkc
-        supports_multimodal: true
-        max_tokens: 8192
-        temperature: 0.5
-        top_p: 0.95
-        top_k: 0
-        max_retries: 10
-        parallel_tool_calls: true
+    # 3D 生成模型 (ep-20260725205234-k8bkc = hyper3d-gen2-260112) 不是聊天模型,
+    # 走异步生成任务接口, 由 model3d 工具调用, 不在此作为 LLM 后端。
     # ===== 本地 Ollama 模型 (备选, 纯本地推理) =====
     deepseek_r1_1_5b:
         model_provider: ollama
