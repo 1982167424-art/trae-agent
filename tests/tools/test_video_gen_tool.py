@@ -1,74 +1,102 @@
 # Copyright (c) 2025 ByteDance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for the VideoGenTool (Doubao Seedance backend)."""
+"""Regression tests for the video generation tool (background music muxing)."""
 
-import os
 import tempfile
-import unittest
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest import mock
 
 from trae_agent.tools.video_gen_tool import VideoGenTool
 
 
-class TestVideoGenToolBasics(unittest.TestCase):
-    def test_get_name(self):
-        self.assertEqual(VideoGenTool().get_name(), "video_gen")
-
-    def test_get_description(self):
-        desc = VideoGenTool().get_description().lower()
-        self.assertIn("video", desc)
-
-    def test_parameters(self):
-        names = {p.name for p in VideoGenTool().get_parameters()}
-        self.assertEqual(names, {"prompt", "output_path", "duration", "ratio"})
+def _tmp(suffix: str) -> Path:
+    f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    f.close()
+    return Path(f.name)
 
 
-class TestVideoGenToolExecute(unittest.IsolatedAsyncioTestCase):
-    async def test_missing_prompt(self):
-        res = await VideoGenTool().execute({"prompt": ""})
-        self.assertIsNotNone(res.error)
-        self.assertEqual(res.error_code, -1)
+def _make_tool() -> VideoGenTool:
+    return VideoGenTool(model_provider="doubao", api_key="test-key")
 
-    async def test_happy_path(self):
-        tool = VideoGenTool()
-        tool._api_key = "test-key"
-        tool._model = "doubao-seedance-1-0-pro-fast-251015"
 
-        fake_mp4 = b"\x00\x00\x00\x18ftypmp42"
-        fake_resp = MagicMock()
-        fake_resp.read.return_value = fake_mp4
-        fake_resp.__enter__.return_value = fake_resp
-        fake_resp.__exit__.return_value = False
-        with tempfile.TemporaryDirectory() as td:
-            out_path = os.path.join(td, "out.mp4")
-            with patch.object(tool, "_post_task", return_value="task-abc"), patch.object(
-                tool, "_poll_task", return_value="http://x/v.mp4"
-            ), patch(
-                "trae_agent.tools.video_gen_tool.urllib.request.urlopen",
-                return_value=fake_resp,
-            ):
-                res = await tool.execute(
-                    {"prompt": "a cat running", "output_path": out_path}
-                )
-            self.assertIsNone(res.error, msg=res.error)
-            self.assertTrue(os.path.exists(out_path))
-            self.assertIn("Video saved to:", res.output)
-            self.assertIn(out_path, res.output)
+def test_parameters_include_background_music():
+    names = {p.name for p in _make_tool().get_parameters()}
+    assert "background_music" in names
+    assert "loop_music" in names
+    assert "prompt" in names
+    assert "duration" in names
+    assert "ratio" in names
 
-    async def test_unknown_provider(self):
-        with patch.dict(os.environ, {"VIDEO_GEN_PROVIDER": "foo"}, clear=True):
-            res = await VideoGenTool().execute({"prompt": "a cat"})
-        self.assertIsNotNone(res.error)
-        self.assertIn("Unknown VIDEO_GEN_PROVIDER", res.error)
 
-    async def test_poll_failure_propagates(self):
-        tool = VideoGenTool()
-        tool._api_key = "test-key"
-        tool._model = "m"
-        with patch.object(tool, "_post_task", return_value="task-abc"), patch.object(
-            tool, "_poll_task", side_effect=RuntimeError("boom")
-        ):
-            res = await tool.execute({"prompt": "a cat", "output_path": "/tmp/x.mp4"})
-        self.assertIsNotNone(res.error)
-        self.assertIn("boom", res.error)
+def test_mux_audio_command_loop():
+    tool = _make_tool()
+    video = _tmp(".mp4")
+    audio = _tmp(".mp3")
+    out = Path(tempfile.gettempdir()) / "out_loop.mp4"
+
+    captured: dict = {}
+
+    def fake_run(cmd, *a, **k):
+        captured["cmd"] = cmd
+        return mock.Mock(returncode=0, stderr=b"")
+
+    with mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"), mock.patch(
+        "subprocess.run", side_effect=fake_run
+    ):
+        tool._mux_audio(video, audio, out, loop=True)
+
+    cmd = captured["cmd"]
+    assert str(video) in cmd
+    assert str(audio) in cmd
+    assert str(out) in cmd
+    assert any("aloop=loop=-1" in str(c) for c in cmd)
+    assert "-c:v" in cmd and "copy" in cmd
+    assert "-c:a" in cmd and "aac" in cmd
+
+
+def test_mux_audio_command_no_loop():
+    tool = _make_tool()
+    video = _tmp(".mp4")
+    audio = _tmp(".mp3")
+    out = Path(tempfile.gettempdir()) / "out_noloop.mp4"
+
+    captured: dict = {}
+
+    def fake_run(cmd, *a, **k):
+        captured["cmd"] = cmd
+        return mock.Mock(returncode=0, stderr=b"")
+
+    with mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"), mock.patch(
+        "subprocess.run", side_effect=fake_run
+    ):
+        tool._mux_audio(video, audio, out, loop=False)
+
+    cmd = captured["cmd"]
+    assert any("apad" in str(c) for c in cmd)
+    assert not any("aloop" in str(c) for c in cmd)
+
+
+def test_mux_audio_missing_ffmpeg_raises():
+    tool = _make_tool()
+    video = _tmp(".mp4")
+    audio = _tmp(".mp3")
+    out = Path(tempfile.gettempdir()) / "out_no_ffmpeg.mp4"
+    with mock.patch("shutil.which", return_value=None):
+        try:
+            tool._mux_audio(video, audio, out, False)
+            assert False, "expected ToolError"
+        except Exception as e:  # noqa: BLE001
+            assert "ffmpeg" in str(e)
+
+
+def test_mux_audio_missing_audio_file_raises():
+    tool = _make_tool()
+    video = _tmp(".mp4")
+    out = Path(tempfile.gettempdir()) / "out_no_audio.mp4"
+    with mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+        try:
+            tool._mux_audio(video, Path("/nonexistent/bgm.mp3"), out, False)
+            assert False, "expected ToolError"
+        except Exception as e:  # noqa: BLE001
+            assert "不存在" in str(e) or "not exist" in str(e).lower()

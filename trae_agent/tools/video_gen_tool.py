@@ -15,6 +15,9 @@ Usage:
 import asyncio
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -116,7 +119,10 @@ class VideoGenTool(Tool):
         return """Generate a video from a text description using a text-to-video model.
 The generated video is saved to a file (mp4) and its path is returned.
 Use this tool when the user asks to create, generate, make, or produce a video / clip / animation.
-Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a sunset", "用 seedance 做一个猫咪动画" """
+Optional background music: pass a local audio file path via `background_music`
+(mp3/m4a/wav); set `loop_music=true` to loop it across the whole clip.
+Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a sunset",
+"用 seedance 做一个猫咪动画，配一段本地背景音乐 ~/music/bgm.mp3" """
 
     @override  # type: ignore[misc]
     def get_parameters(self) -> list[ToolParameter]:
@@ -143,6 +149,20 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
                 name="ratio",
                 type="string",
                 description="Aspect ratio. Options: '16:9', '9:16', '1:1'. Default: '16:9'",
+                required=False,
+            ),
+            ToolParameter(
+                name="background_music",
+                type="string",
+                description="Optional local audio file (mp3/m4a/wav) to mux as background music. "
+                "If provided, the audio is mixed into the generated video via ffmpeg.",
+                required=False,
+            ),
+            ToolParameter(
+                name="loop_music",
+                type="boolean",
+                description="Whether to loop the background music to fill the whole clip. "
+                "Default: false (play once, pad remaining duration with silence).",
                 required=False,
             ),
         ]
@@ -212,6 +232,56 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
         with urllib.request.urlopen(req, timeout=300) as resp:
             return resp.read()
 
+    # ---- background music muxing (requires ffmpeg) ----
+    def _ffmpeg_path(self) -> str:
+        bin_path = shutil.which("ffmpeg")
+        if not bin_path:
+            raise ToolError(
+                "未找到 ffmpeg，无法混流背景音乐。请先安装 ffmpeg "
+                "(macOS: brew install ffmpeg; Linux: apt install ffmpeg) 后重试。"
+            )
+        return bin_path
+
+    def _mux_audio(self, video_path: Path, audio_path: Path, out_path: Path, loop: bool) -> None:
+        """Mix a local audio track into a (silent) generated video via ffmpeg.
+
+        #feature: 背景音乐混流。loop=True 用 aloop 循环铺满整段视频；
+        loop=False 用 apad 在音乐结束后补静音至视频结束。
+        """
+        if not audio_path.exists():
+            raise ToolError(f"背景音乐文件不存在: {audio_path}")
+        ffmpeg = self._ffmpeg_path()
+        filter_expr = "[1:a]aloop=loop=-1:size=2e+09[bg]" if loop else "[1:a]apad[bg]"
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(video_path),
+            "-i",
+            str(audio_path),
+            "-filter_complex",
+            filter_expr,
+            "-map",
+            "0:v",
+            "-map",
+            "[bg]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            str(out_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+        except subprocess.CalledProcessError as e:
+            detail = (e.stderr or b"").decode("utf-8", errors="replace")[:500]
+            raise ToolError(f"ffmpeg 混流失败: {detail}")
+        except subprocess.TimeoutExpired:
+            raise ToolError("ffmpeg 混流超时(>300s)，请使用较短的音乐或视频。")
+
     @override  # type: ignore[misc]
     async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
         prompt = str(arguments.get("prompt", ""))
@@ -223,6 +293,10 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
         except (TypeError, ValueError):
             duration = 5
         ratio = str(arguments.get("ratio", "16:9"))
+
+        background_music = str(arguments.get("background_music", "")).strip()
+        raw_loop = arguments.get("loop_music", False)
+        loop_music = raw_loop is True or str(raw_loop).strip().lower() in ("1", "true", "yes", "y")
 
         try:
             self._ensure_config()
@@ -236,15 +310,28 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
                 out = generate_output_path(extension=".mp4")
 
             out.parent.mkdir(parents=True, exist_ok=True)
-            data = await asyncio.to_thread(self._download, video_url)
-            out.write_bytes(data)
+
+            with tempfile.TemporaryDirectory() as td:
+                raw_video = Path(td) / "raw.mp4"
+                data = await asyncio.to_thread(self._download, video_url)
+                raw_video.write_bytes(data)
+
+                if background_music:
+                    music = Path(background_music)
+                    if not music.is_absolute():
+                        music = Path.cwd() / music
+                    music = music.resolve()
+                    await asyncio.to_thread(self._mux_audio, raw_video, music, out, loop_music)
+                else:
+                    out.write_bytes(raw_video.read_bytes())
 
             provider = os.environ.get("VIDEO_GEN_PROVIDER", "doubao")
+            note = f"\nBackground music: {background_music}" if background_music else ""
             return ToolExecResult(
                 output=(
                     f"Video saved to: {out.resolve()}\n"
                     f"Prompt: {prompt}\nDuration: {duration}s\nRatio: {ratio}\n"
-                    f"Provider: {provider}\nModel: {self._model}"
+                    f"Provider: {provider}\nModel: {self._model}{note}"
                 )
             )
 
