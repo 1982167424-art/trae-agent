@@ -11,6 +11,7 @@ agents:
             - image_gen
             - video_gen
             - model3d
+            - translation
 allow_mcp_servers:
     - playwright
 mcp_servers:
@@ -69,7 +70,7 @@ models:
     # ===== 火山引擎 Doubao 多推理流 (同 provider, 不同 endpoint) =====
     doubao_stream_1:
         model_provider: doubao
-        model: ep-20260725203556-kzbtx
+        model: ep-20260725203556-kzbtx  # doubao-seed-evolving-latest-version (豆包 SEED 最新版, 聊天/多模态 LLM)
         supports_multimodal: true
         max_tokens: 8192
         temperature: 0.5
@@ -120,16 +121,11 @@ models:
         top_k: 0
         max_retries: 10
         parallel_tool_calls: true
-    doubao_stream_6:
-        model_provider: doubao
-        model: ep-20260725205127-jkwmn
-        supports_multimodal: true
-        max_tokens: 8192
-        temperature: 0.5
-        top_p: 0.95
-        top_k: 0
-        max_retries: 10
-        parallel_tool_calls: true
+    # ===== 翻译模型 (ep-20260725205127-jkwmn = doubao-seed-translation-250915) =====
+    # 注意: 翻译模型不走 chat/completions, 而是走 Responses API (/api/v3/responses),
+    # 因此不能作为 LLM 后端在此配置。它由 trae_agent 的 `translation` 工具调用,
+    # 默认 endpoint 写死在 translation_tool.py (DEFAULT_MODEL), 可用
+    # 环境变量 TRANSLATION_MODEL 覆盖。
     # 3D 生成模型 (ep-20260725205234-k8bkc = hyper3d-gen2-260112) 不是聊天模型,
     # 走异步生成任务接口, 由 model3d 工具调用, 不在此作为 LLM 后端。
     # ===== 本地 Ollama 模型 (备选, 纯本地推理) =====
