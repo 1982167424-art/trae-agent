@@ -202,3 +202,4 @@ models/**/.cache/
 
 # Stray nested clones
 /trae-agent/
+.env.local

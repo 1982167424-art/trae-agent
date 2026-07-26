@@ -5,7 +5,6 @@
 
 import asyncio
 import os
-from typing_extensions import override
 
 from rich.panel import Panel
 from rich.text import Text
@@ -15,6 +14,7 @@ from textual.containers import Container
 from textual.reactive import reactive
 from textual.suggester import SuggestFromList
 from textual.widgets import Footer, Header, Input, RichLog, Static
+from typing_extensions import override
 
 from trae_agent.agent.agent_basics import AgentExecution, AgentStep, AgentStepState
 from trae_agent.utils.cli.cli_console import (

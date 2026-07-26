@@ -5,11 +5,10 @@
 
 import base64
 import os
-from datetime import datetime
 from pathlib import Path
-from typing_extensions import override
 
 import openai
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
 from trae_agent.utils.output_manager import generate_output_path

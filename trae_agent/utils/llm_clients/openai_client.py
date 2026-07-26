@@ -4,7 +4,6 @@
 """OpenAI API client wrapper with tool integration."""
 
 import json
-from typing_extensions import override
 
 import openai
 from openai.types.responses import (
@@ -16,6 +15,7 @@ from openai.types.responses import (
     ToolParam,
 )
 from openai.types.responses.response_input_param import FunctionCallOutput
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
@@ -238,10 +238,8 @@ class OpenAIClient(BaseLLMClient):
         for msg in messages:
             if isinstance(msg, dict) and msg.get("type") == "function_call_output":
                 output_call_ids.add(msg.get("call_id", ""))
-            elif hasattr(msg, "call_id") and hasattr(msg, "type"):
-                # FunctionCallOutput object
-                if msg.type == "function_call_output":
-                    output_call_ids.add(msg.call_id)
+            elif hasattr(msg, "call_id") and hasattr(msg, "type") and msg.type == "function_call_output":
+                output_call_ids.add(msg.call_id)
 
         sanitized: ResponseInputParam = []
         for msg in messages:
@@ -250,9 +248,8 @@ class OpenAIClient(BaseLLMClient):
             if isinstance(msg, dict) and msg.get("type") == "function_call":
                 if msg.get("call_id") not in output_call_ids:
                     is_orphaned = True
-            elif hasattr(msg, "type") and msg.type == "function_call":
-                if not hasattr(msg, "call_id") or msg.call_id not in output_call_ids:
-                    is_orphaned = True
+            elif hasattr(msg, "type") and msg.type == "function_call" and (not hasattr(msg, "call_id") or msg.call_id not in output_call_ids):
+                is_orphaned = True
 
             if not is_orphaned:
                 sanitized.append(msg)

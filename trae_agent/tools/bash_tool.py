@@ -13,6 +13,7 @@ import asyncio
 import os
 import re
 import uuid
+
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
