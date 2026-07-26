@@ -11,10 +11,11 @@
 
 import os
 from pathlib import Path
+
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
-from trae_agent.tools.run import maybe_truncate, run
+from trae_agent.tools.run import maybe_truncate
 
 EditToolSubCommands = [
     "view",
@@ -248,9 +249,12 @@ Notes for using the `str_replace` command:
         # P2 修复:Windows(CRLF)仓库在 Unix(LF) agent 上,old_str 用 LF 永远匹配不到
         # CRLF 文件。统一按 LF 做匹配,写回时还原原始换行风格。
         had_crlf = "\r\n" in raw_content
-        file_content = raw_content.expandtabs().replace("\r\n", "\n")
-        old_str = old_str.expandtabs().replace("\r\n", "\n")
-        new_str = (new_str.expandtabs() if new_str is not None else "").replace("\r\n", "\n")
+        # #5 修复:原实现用 expandtabs() 把 tab 显式展开成空格,
+        # 写回时整文件缩进风格被静默改写(Go / Python-tab 项目被破环)。
+        # 这里只做 CRLF→LF 归一化,保留原始 tab 缩进。
+        file_content = raw_content.replace("\r\n", "\n")
+        old_str = old_str.replace("\r\n", "\n")
+        new_str = (new_str if new_str is not None else "").replace("\r\n", "\n")
 
         # Check if old_str is unique in the file
         occurrences = file_content.count(old_str)
@@ -293,8 +297,9 @@ Notes for using the `str_replace` command:
         """Implement the insert command, which inserts new_str at the specified line in the file content."""
         raw_text = self.read_file(path)
         had_crlf = "\r\n" in raw_text
-        file_text = raw_text.expandtabs().replace("\r\n", "\n")
-        new_str = new_str.expandtabs().replace("\r\n", "\n")
+        # #5 修复:见 str_replace,保留原始 tab 缩进。
+        file_text = raw_text.replace("\r\n", "\n")
+        new_str = new_str.replace("\r\n", "\n")
         file_text_lines = file_text.split("\n")
         n_lines_file = len(file_text_lines)
 

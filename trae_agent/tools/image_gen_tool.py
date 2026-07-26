@@ -3,13 +3,13 @@
 
 """Image generation tool — supports multiple backends (SiliconFlow, OpenAI, Doubao)."""
 
+import asyncio
 import base64
 import os
-from datetime import datetime
 from pathlib import Path
-from typing_extensions import override
 
 import openai
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
 from trae_agent.utils.output_manager import generate_output_path
@@ -34,10 +34,19 @@ class ImageGenTool(Tool):
         IMAGE_GEN_PROVIDER=openai trae-cli run "生成风景图"
     """
 
-    def __init__(self, model_provider: str | None = None):
+    def __init__(
+        self,
+        model_provider: str | None = None,
+        working_dir: str | None = None,
+        api_key: str | None = None,
+    ):
         super().__init__(model_provider)
         self._client: openai.OpenAI | None = None
         self._model: str = ""
+        # #6 修复:沙箱根目录;设置后 output_path 必须落在其内。
+        self._working_dir: str | None = working_dir
+        # #10 修复:支持构造函数注入 api_key。
+        self._injected_api_key: str = api_key or ""
 
     def _ensure_client(self):
         if self._client is not None:
@@ -66,7 +75,8 @@ class ImageGenTool(Tool):
             self._model = os.environ.get("IMAGE_GEN_MODEL", "dall-e-3")
 
         elif provider == "doubao":
-            api_key = os.environ.get("DOUBAO_API_KEY", "")
+            # #10 修复:优先用构造函数注入的 api_key,否则回退到 env / CWD config。
+            api_key = self._injected_api_key or os.environ.get("DOUBAO_API_KEY", "")
             base_url = "https://ark.cn-beijing.volces.com/api/v3"
             if not api_key:
                 try:
@@ -78,7 +88,10 @@ class ImageGenTool(Tool):
                 except Exception:
                     pass
             if not api_key:
-                raise ToolError("Doubao requires DOUBAO_API_KEY or config in trae_config.yaml.")
+                raise ToolError(
+                    "Doubao requires DOUBAO_API_KEY env var, api_key=... injection, "
+                    "or config in trae_config.yaml."
+                )
             self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
             self._model = os.environ.get("IMAGE_GEN_MODEL", "doubao-seedream-4-0-250828")
         else:
@@ -118,6 +131,21 @@ Examples: "画一个登录页面的线框图", "生成一张日落风景图", "c
             ),
         ]
 
+    def _resolve_output_path(self, output_path: str) -> Path:
+        """Resolve and sandbox-check the output path (see VideoGenTool)."""
+        out = Path(output_path)
+        if not out.is_absolute():
+            out = Path.cwd() / out
+        out = out.resolve()
+        if self._working_dir is not None:
+            wd = Path(self._working_dir).resolve()
+            if out != wd and not out.is_relative_to(wd):
+                raise ToolError(
+                    f"output_path {out} escapes the allowed working directory "
+                    f"{wd}. Refusing to write outside the workspace."
+                )
+        return out
+
     @override
     async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
         prompt = str(arguments.get("prompt", ""))
@@ -130,7 +158,10 @@ Examples: "画一个登录页面的线框图", "生成一张日落风景图", "c
         try:
             self._ensure_client()
 
-            response = self._client.images.generate(
+            # #7 修复:把阻塞的 SDK 调用与下载移出事件循环,
+            # 避免 async 函数里长时间冻结 UI / 无法响应中断。
+            response = await asyncio.to_thread(
+                self._client.images.generate,
                 model=self._model,
                 prompt=prompt,
                 size=size,
@@ -143,8 +174,7 @@ Examples: "画一个登录页面的线框图", "生成一张日落风景图", "c
 
             # Use output manager to organize files by project on Desktop
             if output_path:
-                out = Path(output_path)
-                out.parent.mkdir(parents=True, exist_ok=True)
+                out = self._resolve_output_path(output_path)
             else:
                 out = generate_output_path(extension=".png")
 
@@ -152,7 +182,8 @@ Examples: "画一个登录页面的线框图", "生成一张日落风景图", "c
                 out.write_bytes(base64.b64decode(image_b64))
             elif image_url:
                 import urllib.request
-                urllib.request.urlretrieve(image_url, str(out))
+
+                await asyncio.to_thread(urllib.request.urlretrieve, image_url, str(out))
             else:
                 return ToolExecResult(error="No image data in API response", error_code=-1)
 
@@ -163,5 +194,7 @@ Examples: "画一个登录页面的线框图", "生成一张日落风景图", "c
 
         except openai.BadRequestError as e:
             return ToolExecResult(error=f"Image generation failed: {e}", error_code=-1)
+        except ToolError as e:
+            return ToolExecResult(error=str(e), error_code=-1)
         except Exception as e:
             return ToolExecResult(error=f"Image generation error: {e}", error_code=-1)

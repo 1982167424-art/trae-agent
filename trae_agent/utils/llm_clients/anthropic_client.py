@@ -3,10 +3,9 @@
 
 """Anthropic API client wrapper with tool integration."""
 
-from typing_extensions import override
-
 import anthropic
 from anthropic.types.tool_union_param import TextEditor20250429
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig

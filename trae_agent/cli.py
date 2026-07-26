@@ -12,8 +12,6 @@ import sys
 import traceback
 from pathlib import Path
 
-import trae_agent
-
 import click
 from dotenv import load_dotenv
 from rich.console import Console
@@ -21,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+import trae_agent
 from trae_agent.agent import Agent
 from trae_agent.utils.cli import CLIConsole, ConsoleFactory, ConsoleMode, ConsoleType
 from trae_agent.utils.config import Config, TraeAgentConfig
@@ -333,7 +332,11 @@ def run(
         sys.exit(1)
 
     # --- Output directory setup ---
-    from trae_agent.utils.output_manager import set_output_dir_override, set_current_project, new_conversation
+    from trae_agent.utils.output_manager import (
+        new_conversation,
+        set_current_project,
+        set_output_dir_override,
+    )
     if output_dir:
         set_output_dir_override(output_dir)
         console.print(f"[blue]Output directory: {output_dir}[/blue]")
@@ -912,7 +915,8 @@ def tools():
 @cli.command()
 def version():
     """Show trae-agent version and exit."""
-    from importlib.metadata import version as _v, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _v
 
     try:
         v = _v("trae-agent")
@@ -1223,7 +1227,7 @@ def trajectory_export(trajectory_file: str, fmt: str, output: str | None):
         console.print(f"[red]Cannot parse trajectory: {e}[/red]")
         sys.exit(1)
 
-    console.print(f"[green]✓ Exported trajectory[/green]")
+    console.print("[green]✓ Exported trajectory[/green]")
     console.print(f"  source: {src}")
     console.print(f"  output: {written}  ({fmt.upper()})")
 
@@ -1274,7 +1278,7 @@ def project_list():
 @click.argument("name")
 def project_use(name: str):
     """Switch to an existing project."""
-    from trae_agent.utils.output_manager import set_current_project, get_project_dir
+    from trae_agent.utils.output_manager import get_project_dir, set_current_project
     project_dir = get_project_dir(name)
     if project_dir is None:
         console.print(f"[red]Project '{name}' not found. Create it with: trae-cli project new {name}[/red]")
@@ -1288,7 +1292,7 @@ def project_use(name: str):
 @click.argument("name", required=False)
 def project_open(name: str | None):
     """Open project folder in Finder."""
-    from trae_agent.utils.output_manager import get_project_dir, _current_project
+    from trae_agent.utils.output_manager import _current_project, get_project_dir
     target = name or _current_project
     if not target:
         console.print("[red]No project specified. Use: trae-cli project open <name>[/red]")

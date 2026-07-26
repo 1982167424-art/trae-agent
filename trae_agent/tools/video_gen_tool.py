@@ -12,12 +12,14 @@ Usage:
     VIDEO_GEN_PROVIDER=doubao trae-cli run "用 seedance 生成一段橘猫视频"
 """
 
+import asyncio
 import json
 import os
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
@@ -44,13 +46,22 @@ POLL_INTERVAL = 10
 class VideoGenTool(Tool):
     """Generate videos from text prompts using Doubao Seedance via Volcengine Ark."""
 
-    def __init__(self, model_provider: str | None = None):
+    def __init__(
+        self,
+        model_provider: str | None = None,
+        working_dir: str | None = None,
+        api_key: str | None = None,
+    ):
         super().__init__(model_provider)
-        self._api_key: str = ""
+        # #10 修复:支持构造函数注入 api_key,避免被迫从 CWD 读 trae_config.yaml。
+        self._api_key: str = api_key or ""
         self._model: str = ""
+        # #6 修复:沙箱根目录;设置后 output_path 必须落在其内。
+        self._working_dir: str | None = working_dir
 
     def _ensure_config(self):
         if self._api_key:
+            self._model = os.environ.get("VIDEO_GEN_MODEL", DEFAULT_MODEL)
             return
 
         provider = os.environ.get("VIDEO_GEN_PROVIDER", "doubao").lower()
@@ -72,10 +83,29 @@ class VideoGenTool(Tool):
         if not api_key:
             raise ToolError(
                 "Doubao video generation requires DOUBAO_API_KEY env var "
-                "(or doubao.api_key in trae_config.yaml)."
+                "(or doubao.api_key in trae_config.yaml, or pass api_key=...)."
             )
         self._api_key = api_key
         self._model = os.environ.get("VIDEO_GEN_MODEL", DEFAULT_MODEL)
+
+    def _resolve_output_path(self, output_path: str) -> Path:
+        """Resolve and sandbox-check the output path.
+
+        #6 修复:绝对路径必须落在 working_dir 之内;相对路径按 CWD 解析。
+        working_dir 未设置(本地可信运行)时不限制,但仍解析为绝对路径。
+        """
+        out = Path(output_path)
+        if not out.is_absolute():
+            out = Path.cwd() / out
+        out = out.resolve()
+        if self._working_dir is not None:
+            wd = Path(self._working_dir).resolve()
+            if out != wd and not out.is_relative_to(wd):
+                raise ToolError(
+                    f"output_path {out} escapes the allowed working directory "
+                    f"{wd}. Refusing to write outside the workspace."
+                )
+        return out
 
     @override  # type: ignore[misc]
     def get_name(self) -> str:
@@ -118,7 +148,7 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
         ]
 
     # ---- internal HTTP helpers (urllib, no extra deps) ----
-
+    # These are blocking and are run off the event loop via asyncio.to_thread.
     def _post_task(self, prompt: str, duration: int, ratio: str) -> str:
         body = {
             "model": self._model,
@@ -144,17 +174,23 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
             raise ToolError(f"No task id in response: {payload}")
         return task_id
 
-    def _poll_task(self, task_id: str) -> str:
+    def _get_task(self, task_id: str) -> dict:
         url = f"{ARK_VIDEO_BASE}/{task_id}"
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    async def _poll_task(self, task_id: str) -> str:
+        # #7 修复:轮询循环改为 async,每次 HTTP GET 用 to_thread 跑在
+        # 线程里,等待用 await asyncio.sleep,从而不冻结事件循环
+        # (原 time.sleep + 阻塞 urllib 在 async 函数里会卡死 UI / 无法 Ctrl-C)。
         deadline = time.time() + POLL_TIMEOUT
         while time.time() < deadline:
-            req = urllib.request.Request(
-                url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
+            payload = await asyncio.to_thread(self._get_task, task_id)
             status = payload.get("status")
             if status == "succeeded":
                 content = payload.get("content") or {}
@@ -168,15 +204,19 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
             if status in ("expired",):
                 raise ToolError(f"Video generation expired: {payload}")
             # queued / running -> wait and retry
-            time.sleep(POLL_INTERVAL)
+            await asyncio.sleep(POLL_INTERVAL)
         raise ToolError(f"Timed out waiting for video task {task_id} after {POLL_TIMEOUT}s")
+
+    def _download(self, url: str) -> bytes:
+        req = urllib.request.Request(url, headers={}, method="GET")
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            return resp.read()
 
     @override  # type: ignore[misc]
     async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
         prompt = str(arguments.get("prompt", ""))
         if not prompt:
             return ToolExecResult(error="prompt is required", error_code=-1)
-
         output_path = str(arguments.get("output_path", ""))
         try:
             duration = int(arguments.get("duration", 5))
@@ -187,19 +227,17 @@ Examples: "生成一段橘猫玩耍的短视频", "create a 5-second video of a 
         try:
             self._ensure_config()
 
-            task_id = self._post_task(prompt, duration, ratio)
-            video_url = self._poll_task(task_id)
+            task_id = await asyncio.to_thread(self._post_task, prompt, duration, ratio)
+            video_url = await self._poll_task(task_id)
 
             if output_path:
-                out = Path(output_path)
-                out.parent.mkdir(parents=True, exist_ok=True)
+                out = self._resolve_output_path(output_path)
             else:
                 out = generate_output_path(extension=".mp4")
 
-            # download the video
-            req = urllib.request.Request(video_url, headers={}, method="GET")
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                out.write_bytes(resp.read())
+            out.parent.mkdir(parents=True, exist_ok=True)
+            data = await asyncio.to_thread(self._download, video_url)
+            out.write_bytes(data)
 
             provider = os.environ.get("VIDEO_GEN_PROVIDER", "doubao")
             return ToolExecResult(

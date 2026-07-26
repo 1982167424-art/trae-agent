@@ -19,6 +19,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
@@ -43,15 +44,18 @@ _LANG_HINT = "e.g. 'en', 'zh', 'ja', 'ko', 'fr', 'de', 'ru', 'es', 'pt', 'it', '
 class TranslationTool(Tool):
     """Translate text between languages using Doubao Seed-Translation via Volcengine Ark."""
 
-    def __init__(self, model_provider: str | None = None):
+    def __init__(self, model_provider: str | None = None, api_key: str | None = None):
         super().__init__(model_provider)
-        self._api_key: str = ""
+        self._api_key: str = api_key or ""
         self._model: str = ""
 
     def _ensure_config(self):
         if self._api_key:
+            self._model = os.environ.get("TRANSLATION_MODEL", DEFAULT_MODEL)
             return
 
+        # #10 修复:优先用构造函数注入的 api_key,避免被迫从 CWD 读
+        # trae_config.yaml(docker 模式 / CWD 无该文件时拿不到 key)。
         api_key = os.environ.get("DOUBAO_API_KEY", "")
         if not api_key:
             try:
@@ -62,6 +66,13 @@ class TranslationTool(Tool):
                     api_key = config.trae_agent.model.model_provider.api_key
             except Exception:
                 pass
+        if not api_key:
+            raise ToolError(
+                "Doubao translation requires DOUBAO_API_KEY env var "
+                "(or doubao.api_key in trae_config.yaml, or pass api_key=...)."
+            )
+        self._api_key = api_key
+        self._model = os.environ.get("TRANSLATION_MODEL", DEFAULT_MODEL)
         if not api_key:
             raise ToolError(
                 "Doubao translation requires DOUBAO_API_KEY env var "

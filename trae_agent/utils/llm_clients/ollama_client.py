@@ -5,11 +5,10 @@
 Ollama API client wrapper with tool integration
 """
 
-import json
 import uuid
-from typing_extensions import override
 
 from ollama import chat as ollama_chat  # pyright: ignore[reportUnknownVariableType]
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig

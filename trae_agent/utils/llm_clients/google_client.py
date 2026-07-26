@@ -7,10 +7,10 @@ import json
 import os
 import traceback
 import uuid
-from typing_extensions import override
 
 from google import genai
 from google.genai import types
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig

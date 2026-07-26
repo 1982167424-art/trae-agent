@@ -4,7 +4,6 @@
 """OpenAI API client wrapper with tool integration."""
 
 import json
-from typing_extensions import override
 
 import openai
 from openai.types.responses import (
@@ -16,6 +15,7 @@ from openai.types.responses import (
     ToolParam,
 )
 from openai.types.responses.response_input_param import FunctionCallOutput
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
 from trae_agent.utils.config import ModelConfig
@@ -56,7 +56,9 @@ class OpenAIClient(BaseLLMClient):
             else openai.NOT_GIVEN,
             # top_p 未配置(None)时不能传给 SDK,否则 Invalid value。未设置走 NOT_GIVEN。
             top_p=model_config.top_p if model_config.top_p is not None else openai.NOT_GIVEN,
-            max_output_tokens=model_config.max_tokens,
+            # #13 修复:max_tokens 可能为 None(未在 config 设置),
+            # 直接传给 Responses API 会被拒。改用带默认值的 getter(缺省 4096)。
+            max_output_tokens=model_config.get_max_tokens_param(),
         )
 
     @override

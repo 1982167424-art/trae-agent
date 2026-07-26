@@ -5,12 +5,12 @@
 
 import asyncio
 import os
-from typing_extensions import override
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from typing_extensions import override
 
 from trae_agent.agent.agent_basics import AgentExecution, AgentState, AgentStep, AgentStepState
 from trae_agent.utils.cli.cli_console import (

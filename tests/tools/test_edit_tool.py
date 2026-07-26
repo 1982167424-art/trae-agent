@@ -102,11 +102,13 @@ class TestTextEditorTool(unittest.IsolatedAsyncioTestCase):
 
     async def test_view_directory(self):
         self.mock_file_system(exists=True, is_dir=True)
-        with patch("trae_agent.tools.edit_tool.run", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = (0, "file1\nfile2", "")
+        # edit_tool 已从 shell `find` 迁移到纯 Python `_list_directory`,
+        # 测试改为 mock 新方法。
+        with patch.object(self.tool, "_list_directory", return_value="Here's the files and directories:\nfile1\nfile2\n") as mock_list:
             result = await self.tool.execute(
                 ToolCallArguments({"command": "view", "path": str(self.test_dir)})
             )
+        mock_list.assert_called_once()
         self.assertIn("files and directories", result.output)
 
     async def test_view_file(self):

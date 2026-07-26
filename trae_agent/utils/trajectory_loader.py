@@ -121,8 +121,12 @@ def load_trajectory(path: str | Path) -> ResumableTrajectory:
         )
 
     if raw.get("success") is True:
-        raise TrajectoryLoadError(
-            f"Trajectory at {p.name} is already marked successful; nothing to resume."
+        # #15 修复:原实现对已 success=true 的轨迹直接拒绝 resume,
+        # 导致无法对已完成任务做二次加工/复盘。改为允许继续(打 warning),
+        # 由调用方决定是否继续。
+        logger.warning(
+            f"Trajectory at {p.name} is already marked successful; "
+            f"resuming anyway for re-processing."
         )
 
     # Recover the LLM-visible message history at the point of interruption.

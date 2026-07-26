@@ -8,12 +8,12 @@ from trae_agent.tools.bash_tool import BashTool, ReadOnlyBashTool
 from trae_agent.tools.ckg_tool import CKGTool
 from trae_agent.tools.edit_tool import TextEditorTool
 from trae_agent.tools.image_gen_tool import ImageGenTool
-from trae_agent.tools.video_gen_tool import VideoGenTool
-from trae_agent.tools.model3d_tool import Model3DTool
-from trae_agent.tools.translation_tool import TranslationTool
 from trae_agent.tools.json_edit_tool import JSONEditTool
+from trae_agent.tools.model3d_tool import Model3DTool
 from trae_agent.tools.sequential_thinking_tool import SequentialThinkingTool
 from trae_agent.tools.task_done_tool import TaskDoneTool
+from trae_agent.tools.translation_tool import TranslationTool
+from trae_agent.tools.video_gen_tool import VideoGenTool
 
 __all__ = [
     "Tool",

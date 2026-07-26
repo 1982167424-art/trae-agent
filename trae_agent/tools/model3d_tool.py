@@ -1,4 +1,4 @@
-# Copyright (c) 2025 ByteDance Ltd. and/or its affiliates
+# Copyright (c) 2025 ByteDance Ltd. and/or its affiliates.
 # SPDX-License-Identifier: MIT
 
 """3D model generation tool — supports the Hyper3D backend via Volcengine Ark.
@@ -12,12 +12,14 @@ Usage:
     MODEL3D_PROVIDER=doubao trae-cli run "用 3D 模型生成一个橘猫"
 """
 
+import asyncio
 import json
 import os
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
@@ -44,13 +46,22 @@ POLL_INTERVAL = 10
 class Model3DTool(Tool):
     """Generate 3D models from text prompts using Hyper3D via Volcengine Ark."""
 
-    def __init__(self, model_provider: str | None = None):
+    def __init__(
+        self,
+        model_provider: str | None = None,
+        working_dir: str | None = None,
+        api_key: str | None = None,
+    ):
         super().__init__(model_provider)
-        self._api_key: str = ""
+        # #10 修复:支持构造函数注入 api_key。
+        self._api_key: str = api_key or ""
         self._model: str = ""
+        # #6 修复:沙箱根目录;设置后 output_path 必须落在其内。
+        self._working_dir: str | None = working_dir
 
     def _ensure_config(self):
         if self._api_key:
+            self._model = os.environ.get("MODEL3D_MODEL", DEFAULT_MODEL)
             return
 
         provider = os.environ.get("MODEL3D_PROVIDER", "doubao").lower()
@@ -72,10 +83,25 @@ class Model3DTool(Tool):
         if not api_key:
             raise ToolError(
                 "3D generation requires DOUBAO_API_KEY env var "
-                "(or doubao.api_key in trae_config.yaml)."
+                "(or doubao.api_key in trae_config.yaml, or pass api_key=...)."
             )
         self._api_key = api_key
         self._model = os.environ.get("MODEL3D_MODEL", DEFAULT_MODEL)
+
+    def _resolve_output_path(self, output_path: str) -> Path:
+        """Resolve and sandbox-check the output path (see VideoGenTool)."""
+        out = Path(output_path)
+        if not out.is_absolute():
+            out = Path.cwd() / out
+        out = out.resolve()
+        if self._working_dir is not None:
+            wd = Path(self._working_dir).resolve()
+            if out != wd and not out.is_relative_to(wd):
+                raise ToolError(
+                    f"output_path {out} escapes the allowed working directory "
+                    f"{wd}. Refusing to write outside the workspace."
+                )
+        return out
 
     @override  # type: ignore[misc]
     def get_name(self) -> str:
@@ -106,7 +132,7 @@ Examples: "生成一个橘猫的3D模型", "create a 3D model of a small chair",
         ]
 
     # ---- internal HTTP helpers (urllib, no extra deps) ----
-
+    # Blocking; run off the event loop via asyncio.to_thread.
     def _post_task(self, prompt: str) -> str:
         body = {
             "model": self._model,
@@ -129,17 +155,21 @@ Examples: "生成一个橘猫的3D模型", "create a 3D model of a small chair",
             raise ToolError(f"No task id in response: {payload}")
         return task_id
 
-    def _poll_task(self, task_id: str) -> str:
+    def _get_task(self, task_id: str) -> dict:
         url = f"{ARK_3D_BASE}/{task_id}"
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    async def _poll_task(self, task_id: str) -> str:
+        # #7 修复:async poll,不冻结事件循环。
         deadline = time.time() + POLL_TIMEOUT
         while time.time() < deadline:
-            req = urllib.request.Request(
-                url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
+            payload = await asyncio.to_thread(self._get_task, task_id)
             status = payload.get("status")
             if status == "succeeded":
                 content = payload.get("content") or {}
@@ -153,33 +183,35 @@ Examples: "生成一个橘猫的3D模型", "create a 3D model of a small chair",
             if status in ("expired",):
                 raise ToolError(f"3D generation expired: {payload}")
             # queued / running -> wait and retry
-            time.sleep(POLL_INTERVAL)
+            await asyncio.sleep(POLL_INTERVAL)
         raise ToolError(f"Timed out waiting for 3D task {task_id} after {POLL_TIMEOUT}s")
+
+    def _download(self, url: str) -> bytes:
+        req = urllib.request.Request(url, headers={}, method="GET")
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            return resp.read()
 
     @override  # type: ignore[misc]
     async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
         prompt = str(arguments.get("prompt", ""))
         if not prompt:
             return ToolExecResult(error="prompt is required", error_code=-1)
-
         output_path = str(arguments.get("output_path", ""))
 
         try:
             self._ensure_config()
 
-            task_id = self._post_task(prompt)
-            file_url = self._poll_task(task_id)
+            task_id = await asyncio.to_thread(self._post_task, prompt)
+            file_url = await self._poll_task(task_id)
 
             if output_path:
-                out = Path(output_path)
-                out.parent.mkdir(parents=True, exist_ok=True)
+                out = self._resolve_output_path(output_path)
             else:
                 out = generate_output_path(extension=".glb")
 
-            # download the 3D model file
-            req = urllib.request.Request(file_url, headers={}, method="GET")
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                out.write_bytes(resp.read())
+            out.parent.mkdir(parents=True, exist_ok=True)
+            data = await asyncio.to_thread(self._download, file_url)
+            out.write_bytes(data)
 
             provider = os.environ.get("MODEL3D_PROVIDER", "doubao")
             return ToolExecResult(

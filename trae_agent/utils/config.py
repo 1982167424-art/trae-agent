@@ -178,7 +178,9 @@ class TraeAgentConfig(AgentConfig):
         max_steps: int | None = None,
     ):
         resolved_value = resolve_config_value(cli_value=max_steps, config_value=self.max_steps)
-        if resolved_value:
+        # #12 修复:原 `if resolved_value:` 把 0 当成假值丢弃,
+        # 导致 --max-steps 0 无法生效。改用 is not None 精确判断。
+        if resolved_value is not None:
             self.max_steps = int(resolved_value)
 
 
@@ -244,8 +246,13 @@ class Config:
         if models is not None and len(models.keys()) > 0:
             config_models: dict[str, ModelConfig] = {}
             for model_name, model_config in models.items():
-                if model_config["model_provider"] not in config_model_providers:
-                    raise ConfigError(f"Model provider {model_config['model_provider']} not found")
+                # #11 修复:原直接用 model_config["model_provider"],
+                # 缺键时抛裸 KeyError。改为安全取值并给清晰报错。
+                provider_name = model_config.get("model_provider")
+                if provider_name is None:
+                    raise ConfigError(f"Model '{model_name}' is missing required 'model_provider'")
+                if provider_name not in config_model_providers:
+                    raise ConfigError(f"Model provider {provider_name!r} for model '{model_name}' not found")
                 config_models[model_name] = ModelConfig(**model_config)
                 config_models[model_name].model_provider = config_model_providers[
                     model_config["model_provider"]
@@ -260,7 +267,10 @@ class Config:
             lakeview_model_name = lakeview.get("model", None)
             if lakeview_model_name is None:
                 raise ConfigError("No model provided for lakeview")
-            lakeview_model = config_models[lakeview_model_name]
+            # #11 修复:原直接 config_models[lakeview_model_name] 缺键抛裸 KeyError。
+            lakeview_model = config_models.get(lakeview_model_name)
+            if lakeview_model is None:
+                raise ConfigError(f"Lakeview model {lakeview_model_name!r} not found in models")
             config.lakeview = LakeviewConfig(
                 model=lakeview_model,
             )
