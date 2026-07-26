@@ -80,7 +80,7 @@ class ImageGenTool(Tool):
             if not api_key:
                 raise ToolError("Doubao requires DOUBAO_API_KEY or config in trae_config.yaml.")
             self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
-            self._model = os.environ.get("IMAGE_GEN_MODEL", "doubao-seedream-3.0")
+            self._model = os.environ.get("IMAGE_GEN_MODEL", "doubao-seedream-4-0-250828")
         else:
             raise ToolError(f"Unknown IMAGE_GEN_PROVIDER: {provider}. Use: siliconflow, openai, doubao")
 

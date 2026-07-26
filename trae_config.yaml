@@ -9,6 +9,7 @@ agents:
             - sequentialthinking
             - task_done
             - image_gen
+            - video_gen
 allow_mcp_servers:
     - playwright
 mcp_servers:
