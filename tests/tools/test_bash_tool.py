@@ -63,6 +63,21 @@ class TestBashTool(unittest.IsolatedAsyncioTestCase):
         self.assertIn("no command provided", result.error.lower())
         self.assertEqual(result.error_code, -1)
 
+    async def test_persistent_session_across_commands(self):
+        # First command establishes/uses the persistent shell.
+        r1 = await self.tool.execute(ToolCallArguments({"command": "echo first"}))
+        self.assertEqual(r1.error_code, 0)
+
+        # Second command WITHOUT restart must reuse the same shell.
+        # Before the fix each command ended with `exit`, killing the
+        # /bin/bash process, so the 2nd command failed with a broken pipe.
+        r2 = await self.tool.execute(ToolCallArguments({"command": "echo second"}))
+        self.assertEqual(
+            r2.error_code, 0, msg=f"persistent session broken: {r2.error}"
+        )
+        self.assertIn("second", r2.output)
+        self.assertNotIn("must be restarted", r2.error)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -131,11 +131,11 @@ class _BashSession:
             bg_command = command
             if not command.endswith("&"):
                 bg_command = command + " &"
-            shell_cmd = f"(\n{bg_command}\n){command_sep} {sentinel_replaced}\nexit\n"
+            shell_cmd = f"(\n{bg_command}\n){command_sep} {sentinel_replaced}\n"
         else:
             # Unix: run in subshell, capture exit code immediately after execution.
             # __ec=$? must come right after the subshell, before any assignment.
-            shell_cmd = f"(\n{command}\n); __ec=$?; echo {sentinel_replaced.replace(errcode_retriever, '$__ec')}\nexit\n"
+            shell_cmd = f"(\n{command}\n); __ec=$?; echo {sentinel_replaced.replace(errcode_retriever, '$__ec')}\n"
         self._process.stdin.write(shell_cmd.encode())
         await self._process.stdin.drain()
 
