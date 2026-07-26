@@ -5,7 +5,6 @@
 
 import json
 from abc import ABC, abstractmethod
-from typing_extensions import override
 
 import openai
 from openai.types.chat import (
@@ -23,6 +22,7 @@ from openai.types.chat.chat_completion_tool_message_param import (
     ChatCompletionToolMessageParam,
 )
 from openai.types.shared_params.function_definition import FunctionDefinition
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCall
 from trae_agent.utils.config import ModelConfig

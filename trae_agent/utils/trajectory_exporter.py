@@ -126,7 +126,6 @@ def render_markdown(traj_data: dict[str, Any]) -> str:
 def render_html(traj_data: dict[str, Any]) -> str:
     """Render a trajectory dict as a self-contained HTML page."""
     md = render_markdown(traj_data)
-    body = md.replace("```", "<pre><code>").replace("\n", "</code></pre>\n", 1)
     return (
         "<!doctype html>\n"
         "<html lang=\"en\"><head>\n"

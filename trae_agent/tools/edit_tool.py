@@ -11,10 +11,11 @@
 
 import os
 from pathlib import Path
+
 from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
-from trae_agent.tools.run import maybe_truncate, run
+from trae_agent.tools.run import maybe_truncate
 
 EditToolSubCommands = [
     "view",

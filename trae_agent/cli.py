@@ -4,6 +4,8 @@
 """Command Line Interface for Trae Agent."""
 
 import asyncio
+import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -326,7 +328,11 @@ def run(
         sys.exit(1)
 
     # --- Output directory setup ---
-    from trae_agent.utils.output_manager import set_output_dir_override, set_current_project, new_conversation
+    from trae_agent.utils.output_manager import (
+        new_conversation,
+        set_current_project,
+        set_output_dir_override,
+    )
     if output_dir:
         set_output_dir_override(output_dir)
         console.print(f"[blue]Output directory: {output_dir}[/blue]")
@@ -902,7 +908,8 @@ def tools():
 @cli.command()
 def version():
     """Show trae-agent version and exit."""
-    from importlib.metadata import version as _v, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _v
 
     try:
         v = _v("trae-agent")
@@ -1213,7 +1220,7 @@ def trajectory_export(trajectory_file: str, fmt: str, output: str | None):
         console.print(f"[red]Cannot parse trajectory: {e}[/red]")
         sys.exit(1)
 
-    console.print(f"[green]✓ Exported trajectory[/green]")
+    console.print("[green]✓ Exported trajectory[/green]")
     console.print(f"  source: {src}")
     console.print(f"  output: {written}  ({fmt.upper()})")
 
@@ -1264,7 +1271,7 @@ def project_list():
 @click.argument("name")
 def project_use(name: str):
     """Switch to an existing project."""
-    from trae_agent.utils.output_manager import set_current_project, get_project_dir
+    from trae_agent.utils.output_manager import get_project_dir, set_current_project
     project_dir = get_project_dir(name)
     if project_dir is None:
         console.print(f"[red]Project '{name}' not found. Create it with: trae-cli project new {name}[/red]")
@@ -1278,7 +1285,7 @@ def project_use(name: str):
 @click.argument("name", required=False)
 def project_open(name: str | None):
     """Open project folder in Finder."""
-    from trae_agent.utils.output_manager import get_project_dir, _current_project
+    from trae_agent.utils.output_manager import _current_project, get_project_dir
     target = name or _current_project
     if not target:
         console.print("[red]No project specified. Use: trae-cli project open <name>[/red]")
@@ -1294,6 +1301,119 @@ def project_open(name: str | None):
     elif os.name == "nt":
         subprocess.Popen(["explorer", str(project_dir)])
     console.print(f"Opened: {project_dir}")
+
+
+@cli.command()
+@click.option("--config", "config_file", default="trae_config.yaml", help="Config file to read MCP servers from.")
+def scan(config_file: str):
+    """Scan MCP servers and skills for security risks (heuristic, static)."""
+    from trae_agent.utils.security_scan import scan_mcp_server, scan_plugin_source
+
+    table = Table(title="Security Scan")
+    table.add_column("Target", style="cyan", width=30)
+    table.add_column("Type", style="dim")
+    table.add_column("Risk", style="bold")
+    table.add_column("Rule", style="yellow")
+    table.add_column("Detail", style="red")
+
+    any_risk = False
+
+    # --- MCP servers from config ---
+    cfg_path = Path(resolve_config_file(config_file))
+    mcp_servers: dict = {}
+    if cfg_path.exists():
+        import yaml
+
+        try:
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            mcp_servers = data.get("mcp_servers", {}) or {}
+        except Exception:
+            pass
+    for name, srv in mcp_servers.items():
+        level, fs = scan_mcp_server(srv)
+        for f in fs:
+            any_risk = True
+            table.add_row(name, "mcp", level.value, f.rule, f.detail)
+
+    # --- Skills (user-wide + project-local) ---
+    skill_dirs = [
+        Path.home() / ".trae-agent" / "skills",
+        Path.cwd() / ".trae-agent" / "skills",
+    ]
+    for d in skill_dirs:
+        if not d.exists():
+            continue
+        for fpath in d.rglob("*"):
+            if fpath.is_file() and fpath.suffix in (".md", ".py", ".js", ".ts"):
+                try:
+                    src = fpath.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                level, fs = scan_plugin_source(src)
+                for f in fs:
+                    any_risk = True
+                    rel = str(fpath)
+                    with contextlib.suppress(Exception):
+                        rel = str(fpath.relative_to(Path.home()))
+                    table.add_row(rel, "skill", level.value, f.rule, f.detail)
+
+    if not any_risk:
+        console.print(
+            Panel(
+                "[green]No obvious security risks detected (heuristic scan only).[/green]",
+                title="Security Scan",
+                border_style="green",
+            )
+        )
+    else:
+        console.print(table)
+        console.print(
+            "[yellow]提示：以上为启发式静态扫描，仅覆盖常见风险模式，不构成安全审计。[/yellow]"
+        )
+
+
+@cli.command()
+def sessions():
+    """List saved trajectories (each is a resumable session / branch)."""
+    roots = [
+        Path.home() / "Desktop" / "trae-agent-outputs",
+        Path.cwd() / ".trae",
+    ]
+    rows: list[tuple[Path, str, str]] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for f in root.rglob("trajectory_*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            task = (data.get("task") or "").strip().replace("\n", " ")
+            if len(task) > 60:
+                task = task[:60] + "…"
+            rows.append((f, str(data.get("start_time", "")), task))
+
+    if not rows:
+        console.print(
+            Panel(
+                "[yellow]No trajectories found.[/yellow]\n"
+                "Run a task, then use [cyan]trae resume <file>[/cyan] to continue a branch.",
+                title="Sessions",
+                border_style="yellow",
+            )
+        )
+        return
+
+    table = Table(title=f"Sessions / Branches ({len(rows)})")
+    table.add_column("Trajectory", style="cyan")
+    table.add_column("Start", style="dim")
+    table.add_column("Task", style="green")
+    for f, start, task in sorted(rows, key=lambda r: str(r[0]), reverse=True):
+        table.add_row(str(f), start, task or "(empty)")
+    console.print(table)
+    console.print(
+        "[dim]Tip: [cyan]trae resume <trajectory_file>[/cyan] continues a branch from that point.[/dim]"
+    )
 
 
 def main():

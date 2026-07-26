@@ -7,11 +7,12 @@ import asyncio
 import contextlib
 import os
 import subprocess
+
 from typing_extensions import override
 
 from trae_agent.agent.agent_basics import AgentError, AgentExecution
 from trae_agent.agent.base_agent import BaseAgent
-from trae_agent.prompt.agent_prompt import TRAE_AGENT_SYSTEM_PROMPT, MULTIMODAL_PROMPT
+from trae_agent.prompt.agent_prompt import MULTIMODAL_PROMPT, TRAE_AGENT_SYSTEM_PROMPT
 from trae_agent.tools import tools_registry
 from trae_agent.tools.base import Tool, ToolResult
 from trae_agent.utils.config import MCPServerConfig, TraeAgentConfig

@@ -5,11 +5,11 @@
 
 import json
 from pathlib import Path
-from typing_extensions import override
 
 from jsonpath_ng import Fields, Index
 from jsonpath_ng import parse as jsonpath_parse
 from jsonpath_ng.exceptions import JSONPathError
+from typing_extensions import override
 
 from trae_agent.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
 
