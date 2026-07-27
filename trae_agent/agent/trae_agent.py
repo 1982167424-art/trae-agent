@@ -63,8 +63,14 @@ class TraeAgent(BaseAgent):
         )
 
     async def initialise_mcp(self):
-        """Async factory to create and initialize TraeAgent."""
-        await self.discover_mcp_tools()
+        """Initialize MCP tools with a timeout so the agent never blocks forever."""
+        try:
+            # 30 second timeout for MCP initialization
+            await asyncio.wait_for(self.discover_mcp_tools(), timeout=30.0)
+        except asyncio.TimeoutError:
+            print("[trae-agent] Warning: MCP tools timed out after 30s, skipping.")
+        except Exception as e:
+            print(f"[trae-agent] Warning: MCP tools failed to initialize: {e}")
 
         if self.mcp_tools:
             self._tools.extend(self.mcp_tools)
